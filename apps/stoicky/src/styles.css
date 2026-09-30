@@ -55,3 +55,5 @@ label{display:block;font-size:11px;font-weight:700;color:#aab1bf;margin:0 0 8px}
 .project-title-row h3{margin:0!important}
 .delete-project{width:28px;height:28px;flex:none;border:1px solid #2a3039;background:#151922;color:#858d9b;border-radius:7px;display:grid;place-items:center}
 .delete-project:hover{color:#ff9d9d;border-color:#704040;background:#1b1518}
+
+.project-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.project-actions .watch-link{margin-top:0;border:1px solid #2a3039;background:#151922;border-radius:7px;padding:6px 8px;cursor:pointer}.project-actions .watch-link:hover{border-color:#414c2b;text-decoration:none}.project-actions .watch-link svg{transform:rotate(90deg)}
