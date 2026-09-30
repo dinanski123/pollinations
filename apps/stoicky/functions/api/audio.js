@@ -16,17 +16,22 @@ export async function onRequestPost({ request, env }) {
       const elevenKey = env.ELEVENLABS_API_KEY;
       if (!elevenKey) return json({ error: "ElevenLabs is not configured. Add ELEVENLABS_API_KEY in Cloudflare Pages." }, 503);
       if (!voiceId) return json({ error: "Add an authorized ElevenLabs voice ID." }, 400);
-      const upstream = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
-        method: "POST",
-        headers: {
-          "xi-api-key": elevenKey,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          text: input,
-          model_id: "eleven_multilingual_v2"
-        })
-      });
+
+      const upstream = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
+        {
+          method: "POST",
+          headers: {
+            "xi-api-key": elevenKey,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            text: input,
+            model_id: "eleven_multilingual_v2"
+          })
+        }
+      );
+
       if (!upstream.ok) {
         const text = await upstream.text();
         let message = text;
@@ -36,6 +41,7 @@ export async function onRequestPost({ request, env }) {
         } catch {}
         return json({ error: message || "ElevenLabs voice generation failed." }, upstream.status);
       }
+
       return new Response(upstream.body, {
         status: 200,
         headers: {
@@ -45,7 +51,7 @@ export async function onRequestPost({ request, env }) {
       });
     }
 
-    const upstream = await fetch("https://gen.pollinations.ai/v1/audio/speech",
+    const upstream = await fetch("https://gen.pollinations.ai/v1/audio/speech", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${key}`,
