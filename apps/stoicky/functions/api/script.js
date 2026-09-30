@@ -29,7 +29,38 @@ Create exactly ${sceneCount} scenes. Each scene must describe one self-contained
           { role: "system", content: "You are a professional short-form video writer. Follow the requested JSON format exactly." },
           { role: "user", content: prompt }
         ],
-        temperature: 0.7
+        temperature: 0.4,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "stoicky_scene_plan",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["title", "hook", "scenes"],
+              properties: {
+                title: { type: "string" },
+                hook: { type: "string" },
+                scenes: {
+                  type: "array",
+                  minItems: sceneCount,
+                  maxItems: sceneCount,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["n", "narration", "visual"],
+                    properties: {
+                      n: { type: "integer" },
+                      narration: { type: "string" },
+                      visual: { type: "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       })
     });
 
@@ -65,11 +96,29 @@ Create exactly ${sceneCount} scenes. Each scene must describe one self-contained
 
 function extractText(data) {
   const content = data?.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content.map(part => typeof part === "string" ? part : part?.text || "").join("\n");
+  const parts = flattenText(content);
+  if (parts) return parts;
+
+  if (Array.isArray(data?.output)) {
+    const outputText = data.output.flatMap(item => flattenText(item?.content)).join("\n").trim();
+    if (outputText) return outputText;
   }
-  return data?.output_text || data?.text || "";
+
+  return flattenText(data?.output_text) || flattenText(data?.text) || "";
+}
+
+function flattenText(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.map(part => flattenText(
+      typeof part === "string" ? part :
+      part?.text ?? part?.value ?? part?.content ?? part?.output_text ?? ""
+    )).filter(Boolean).join("\n");
+  }
+  if (value && typeof value === "object") {
+    return flattenText(value.text ?? value.value ?? value.content ?? value.output_text ?? "");
+  }
+  return "";
 }
 
 function parseScript(raw, sceneCount) {
@@ -87,11 +136,12 @@ function parseScript(raw, sceneCount) {
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate);
-      if (Array.isArray(parsed?.scenes) && parsed.scenes.length >= sceneCount) {
+      const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes : null;
+      if (scenes && scenes.length >= sceneCount) {
         return {
           title: String(parsed.title || "").trim(),
           hook: String(parsed.hook || "").trim(),
-          scenes: parsed.scenes
+          scenes
         };
       }
     } catch {}
