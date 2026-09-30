@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ArrowRight, Check, ChevronDown, Film, Image as ImageIcon, Layers3, Play, Plus, Sparkles, Wand2, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, Film, Image as ImageIcon, Layers3, Link2, LogOut, Play, Plus, Sparkles, Wand2, X } from "lucide-react";
 import "./styles.css";
 
 const seedProjects = [
@@ -9,6 +9,29 @@ const seedProjects = [
 ];
 
 const durationSeconds = { "30 seconds": 30, "45 seconds": 45, "60 seconds": 60 };
+const POLLINATIONS_AUTHORIZE_URL = "https://enter.pollinations.ai/authorize";
+const POLLINATIONS_TOKEN_URL = "https://enter.pollinations.ai/api/oauth/token";
+
+function redirectUri() {
+  return window.location.origin + "/callback";
+}
+
+function randomToken(size = 32) {
+  const bytes = new Uint8Array(size);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function base64Url(bytes) {
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function createPkceChallenge(verifier) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return base64Url(new Uint8Array(digest));
+}
 
 function App() {
   const [view, setView] = useState("create");
@@ -18,30 +41,150 @@ function App() {
   const [projects, setProjects] = useState(() => {
     try { return JSON.parse(localStorage.getItem("stoicky-projects")) || seedProjects; } catch { return seedProjects; }
   });
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem("stoicky-pollinations-key") || "");
+  const [appKey, setAppKey] = useState(() => localStorage.getItem("stoicky-pollinations-app-key") || "");
+  const [userToken, setUserToken] = useState(() => sessionStorage.getItem("stoicky-pollinations-token") || "");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [notice, setNotice] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
 
-  useEffect(() => { localStorage.setItem("stoicky-projects", JSON.stringify(projects)); }, [projects]);
+  useEffect(() => {
+    localStorage.setItem("stoicky-projects", JSON.stringify(projects));
+  }, [projects]);
 
-  const saveKey = () => {
-    localStorage.setItem("stoicky-pollinations-key", apiKey.trim());
+  useEffect(() => {
+    const finishOAuth = async () => {
+      if (window.location.pathname !== "/callback") return;
+
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("code");
+      const state = params.get("state");
+      const expectedState = sessionStorage.getItem("stoicky-pollinations-state");
+      const verifier = sessionStorage.getItem("stoicky-pollinations-verifier");
+      const storedAppKey = localStorage.getItem("stoicky-pollinations-app-key") || "";
+
+      if (!code) {
+        const error = params.get("error");
+        if (error) setAuthError(params.get("error_description") || error);
+        window.history.replaceState({}, "", "/");
+        return;
+      }
+
+      if (!state || !expectedState || state !== expectedState || !verifier || !storedAppKey) {
+        setAuthError("Pollinations authorization could not be verified. Please connect again.");
+        window.history.replaceState({}, "", "/");
+        return;
+      }
+
+      setAuthLoading(true);
+      try {
+        const response = await fetch(POLLINATIONS_TOKEN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "authorization_code",
+            code,
+            client_id: storedAppKey,
+            redirect_uri: redirectUri(),
+            code_verifier: verifier
+          })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.access_token) {
+          throw new Error(data.error_description || data.error || "Pollinations authorization failed.");
+        }
+        sessionStorage.setItem("stoicky-pollinations-token", data.access_token);
+        setUserToken(data.access_token);
+        setAuthError("");
+        setNotice("Pollinations connected.");
+      } catch (error) {
+        setAuthError(error.message || "Pollinations authorization failed.");
+      } finally {
+        sessionStorage.removeItem("stoicky-pollinations-state");
+        sessionStorage.removeItem("stoicky-pollinations-verifier");
+        setAuthLoading(false);
+        window.history.replaceState({}, "", "/");
+      }
+    };
+
+    finishOAuth();
+  }, []);
+
+  const saveSettings = () => {
+    const key = appKey.trim();
+    if (!key || !key.startsWith("pk_")) {
+      setAuthError("Enter your Pollinations App Key starting with pk_.");
+      return;
+    }
+    localStorage.setItem("stoicky-pollinations-app-key", key);
+    setAppKey(key);
+    setAuthError("");
     setShowSettings(false);
-    setNotice("Settings saved.");
+    setNotice("Pollinations App Key saved.");
   };
 
-  const authHeaders = () => apiKey.trim() ? { "x-pollinations-key": apiKey.trim() } : {};
+  const connectPollinations = async () => {
+    const key = appKey.trim();
+    if (!key) {
+      setShowSettings(true);
+      setNotice("Enter your Pollinations pk_ App Key first.");
+      return;
+    }
+    if (!key.startsWith("pk_")) {
+      setNotice("That does not look like a Pollinations App Key. It should start with pk_.");
+      setShowSettings(true);
+      return;
+    }
+
+    localStorage.setItem("stoicky-pollinations-app-key", key);
+
+    const verifier = randomToken(48);
+    const state = randomToken(24);
+    const challenge = await createPkceChallenge(verifier);
+
+    sessionStorage.setItem("stoicky-pollinations-verifier", verifier);
+    sessionStorage.setItem("stoicky-pollinations-state", state);
+
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: key,
+      redirect_uri: redirectUri(),
+      scope: "usage",
+      models: "openai/gpt-5.4-nano,google/veo-3.1-fast",
+      expiry: "7",
+      budget: "25",
+      state,
+      code_challenge: challenge,
+      code_challenge_method: "S256"
+    });
+
+    window.location.href = POLLINATIONS_AUTHORIZE_URL + "?" + params.toString();
+  };
+
+  const disconnectPollinations = () => {
+    sessionStorage.removeItem("stoicky-pollinations-token");
+    setUserToken("");
+    setNotice("Pollinations disconnected.");
+  };
+
+  const authHeaders = () => userToken ? { "x-pollinations-key": userToken } : {};
 
   const generate = async () => {
     if (!topic.trim()) { setNotice("Add a topic first."); return; }
-    setBusy(true); setNotice(""); setVideoUrl("");
+    if (!userToken) { setNotice("Connect Pollinations before generating a video."); return; }
+
+    setBusy(true);
+    setNotice("");
+    setVideoUrl("");
+
     try {
       setProgress("Writing script...");
       const scriptRes = await fetch("/api/script", {
-        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ topic, style, duration })
       });
       const scriptData = await scriptRes.json();
@@ -54,7 +197,8 @@ function App() {
 
       setProgress("Generating video — this can take a few minutes...");
       const videoRes = await fetch("/api/video", {
-        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           prompt: videoPrompt,
           duration: durationSeconds[duration],
@@ -88,6 +232,7 @@ function App() {
         videoUrl: url,
         script
       };
+
       setProjects(p => [project, ...p]);
       setVideoUrl(url);
       setProgress("Video ready.");
@@ -110,7 +255,7 @@ function App() {
           <button className={"nav-item " + (view === "templates" ? "active" : "")} onClick={() => setView("templates")}><Layers3 size={17}/> Templates</button>
         </nav>
         <div className="sidebar-bottom">
-          <div className="usage"><div><span>Generation status</span><strong>{busy ? "WORKING" : "READY"}</strong></div><div className="meter"><i style={{width: busy ? "45%" : "100%"}}/></div><small>Powered by your Pollinations key</small></div>
+          <div className="usage"><div><span>Generation status</span><strong>{busy ? "WORKING" : "READY"}</strong></div><div className="meter"><i style={{width: busy ? "45%" : "100%"}}/></div><small>{userToken ? "Pollinations wallet connected" : "Connect Pollinations to generate"}</small></div>
           <button className="settings-btn" onClick={() => setShowSettings(true)}>Settings</button>
           <div className="user"><div className="avatar">F</div><div><strong>Creator</strong><span>Stoicky</span></div><ChevronDown size={15}/></div>
         </div>
@@ -119,7 +264,12 @@ function App() {
       <main className="main">
         <header className="topbar">
           <div><span className="eyebrow">AI VIDEO STUDIO</span><h1>{view === "create" ? "Create a video" : view === "projects" ? "Your projects" : "Templates"}</h1></div>
-          <div className="top-actions"><span className="credit-pill">✦ Pollinations</span><button className="avatar small">F</button></div>
+          <div className="top-actions">
+            <button className={"connect-pill " + (userToken ? "connected" : "")} onClick={userToken ? disconnectPollinations : connectPollinations} disabled={authLoading}>
+              {authLoading ? <span className="spinner"/> : userToken ? <><Check size={13}/> Connected</> : <><Link2 size={13}/> Connect Pollinations</>}
+            </button>
+            <button className="avatar small">F</button>
+          </div>
         </header>
 
         {view === "create" && (
@@ -134,14 +284,14 @@ function App() {
                 <div><label>Duration</label><select value={duration} onChange={e => setDuration(e.target.value)}><option>30 seconds</option><option>45 seconds</option><option>60 seconds</option></select></div>
               </div>
               {progress && <div className="progress"><span className="spinner"/><span>{progress}</span></div>}
-              {notice && <div className="notice">{notice}{!apiKey && <button onClick={() => setShowSettings(true)}>Open Settings</button>}</div>}
+              {notice && <div className="notice">{notice}{!userToken && <button onClick={() => setShowSettings(true)}>Open Settings</button>}</div>}
               <button className="generate" onClick={generate} disabled={busy}>{busy ? <><span className="spinner dark"/> Generating...</> : <><Sparkles size={17}/> Generate video <ArrowRight size={17}/></>}</button>
-              <p className="fineprint">Pollinations generation uses the API key you configure in Settings.</p>
+              <p className="fineprint">Your Pollinations connection authorizes Stoicky to use the Pollen budget you approve.</p>
             </div>
 
             <div className="panel pipeline">
               <div className="panel-head"><div><h2>Production pipeline</h2><p>{busy ? "Your generation is in progress." : "Everything happens in one flow."}</p></div></div>
-              {[["01","Script","AI writes a short-form script with a strong hook."],["02","Scenes","The script becomes visual direction automatically."],["03","Video","Pollinations generates the cinematic video."],["04","Review","Preview the result and keep the project."]].map((item,i) => <div className={"step " + (busy && i === (progress?.includes("script") ? 0 : progress?.includes("video") ? 2 : 1) ? "current" : "")} key={item[0]}><div className="step-no">{item[0]}</div><div><strong>{item[1]}</strong><p>{item[2]}</p></div>{busy && i < 3 && <span className="dot"/>}</div>)}
+              {[[ "01","Script","AI writes a short-form script with a strong hook."],[ "02","Scenes","The script becomes visual direction automatically."],[ "03","Video","Pollinations generates the cinematic video."],[ "04","Review","Preview the result and keep the project." ]].map((item,i) => <div className={"step " + (busy && i === (progress?.includes("script") ? 0 : progress?.includes("video") ? 2 : 1) ? "current" : "")} key={item[0]}><div className="step-no">{item[0]}</div><div><strong>{item[1]}</strong><p>{item[2]}</p></div>{busy && i < 3 && <span className="dot"/>}</div>)}
               <div className="preview-card">
                 {videoUrl ? <video className="preview-image video-preview" src={videoUrl} controls playsInline/> : <div className="preview-image" style={{backgroundImage:'url("' + seedProjects[0].image + '")'}}><button><Play size={17} fill="currentColor"/></button></div>}
                 <div><span>{videoUrl ? "GENERATED VIDEO" : "LIVE PREVIEW"}</span><strong>Vertical · 9:16</strong></div>
@@ -166,11 +316,16 @@ function App() {
       </main>
 
       {showSettings && <div className="modal-backdrop" onClick={() => setShowSettings(false)}><div className="modal" onClick={e => e.stopPropagation()}>
-        <div className="modal-head"><h2>Settings</h2><button onClick={() => setShowSettings(false)}><X size={18}/></button></div>
-        <label>Pollinations API key</label><input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk_..." autoComplete="off"/>
-        <p className="modal-copy">Your key is stored only in this browser and sent to your Stoicky API function for generation. For a private deployment, you can instead set <b>POLLINATIONS_API_KEY</b> as a Cloudflare Pages secret.</p>
-        <label>Video model</label><input value="google/veo-3.1-fast" readOnly/>
-        <button className="generate" onClick={saveKey}><Check size={17}/> Save settings</button>
+        <div className="modal-head"><h2>Pollinations</h2><button onClick={() => setShowSettings(false)}><X size={18}/></button></div>
+        <label>Pollinations App Key</label>
+        <input type="text" value={appKey} onChange={e => setAppKey(e.target.value)} placeholder="pk_..." autoComplete="off"/>
+        <p className="modal-copy">Your publishable <b>pk_</b> App Key identifies Stoicky. When you connect, Pollinations asks you to approve a Pollen budget and returns a temporary user-authorized <b>sk_</b> token. Stoicky keeps that token in this browser session only.</p>
+        {authError && <div className="notice">{authError}</div>}
+        <button className="generate" onClick={connectPollinations} disabled={authLoading}>{authLoading ? <><span className="spinner dark"/> Connecting...</> : <><Link2 size={17}/> Connect Pollinations</>}</button>
+        <button className="secondary-action" onClick={saveSettings}><Check size={14}/> Save App Key</button>
+        {userToken && <button className="disconnect-btn" onClick={disconnectPollinations}><LogOut size={14}/> Disconnect</button>}
+        <label className="model-label">Video model</label>
+        <input value="google/veo-3.1-fast" readOnly/>
       </div></div>}
     </div>
   );
