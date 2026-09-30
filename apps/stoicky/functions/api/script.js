@@ -17,54 +17,65 @@ Return ONLY valid JSON with this shape:
 {"title":"...","hook":"...","scenes":[{"n":1,"narration":"...","visual":"..."}]}
 Create exactly ${sceneCount} scenes. Each scene must describe one self-contained visual beat that can be generated as a single 6-second vertical clip. Keep the main subject, wardrobe, environment, lighting and visual language coherent between scenes. Narration must be concise and spoken naturally. Visual prompts should be concrete cinematic directions: subject action, setting, camera movement, lighting and mood. Do not put text, captions, logos or UI elements inside the scene.`;
 
-    const response = await fetch("https://gen.pollinations.ai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${key}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: "You are a professional short-form video writer. Follow the requested JSON format exactly." },
-          { role: "user", content: prompt }
-        ],
-        temperature: 0.4,
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "stoicky_scene_plan",
-            strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              required: ["title", "hook", "scenes"],
-              properties: {
-                title: { type: "string" },
-                hook: { type: "string" },
-                scenes: {
-                  type: "array",
-                  minItems: sceneCount,
-                  maxItems: sceneCount,
-                  items: {
-                    type: "object",
-                    additionalProperties: false,
-                    required: ["n", "narration", "visual"],
-                    properties: {
-                      n: { type: "integer" },
-                      narration: { type: "string" },
-                      visual: { type: "string" }
-                    }
+    const requestBody = {
+      model,
+      messages: [
+        { role: "system", content: "You are a professional short-form video writer. Follow the requested JSON format exactly." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.4,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "stoicky_scene_plan",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title", "hook", "scenes"],
+            properties: {
+              title: { type: "string" },
+              hook: { type: "string" },
+              scenes: {
+                type: "array",
+                minItems: sceneCount,
+                maxItems: sceneCount,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["n", "narration", "visual"],
+                  properties: {
+                    n: { type: "integer" },
+                    narration: { type: "string" },
+                    visual: { type: "string" }
                   }
                 }
               }
             }
           }
         }
-      })
+      }
+    };
+
+    const callModel = payload => fetch("https://gen.pollinations.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${key}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
     });
 
-    const data = await response.json().catch(() => ({}));
+    let response = await callModel(requestBody);
+    let data = await response.json().catch(() => ({}));
+
+    // Some OpenAI-compatible model routes expose JSON output but not json_schema.
+    // Retry once without structured-output metadata instead of failing the whole project.
+    if (!response.ok && response.status === 400 && /response.?format|json.?schema|structured/i.test(JSON.stringify(data))) {
+      const { response_format: _responseFormat, ...fallbackBody } = requestBody;
+      response = await callModel(fallbackBody);
+      data = await response.json().catch(() => ({}));
+    }
     if (!response.ok) {
       return json({ error: data?.error?.message || data?.error || "Script generation failed." }, response.status);
     }
