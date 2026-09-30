@@ -9,6 +9,12 @@ const seedProjects = [
 ];
 
 const durationSeconds = { "30 seconds": 30, "45 seconds": 45, "60 seconds": 60 };
+const videoModels = {
+  "Google Veo 3.1 Fast": "google/veo-3.1-fast",
+  "Amazon Nova Reel": "amazon/nova-reel-v1",
+  "Seedance 2.0 Fast": "bytedance/seedance-2.0-fast",
+  "Wan 2.7": "alibaba/wan-2.7"
+};
 const POLLINATIONS_AUTHORIZE_URL = "https://enter.pollinations.ai/authorize";
 const POLLINATIONS_TOKEN_URL = "https://enter.pollinations.ai/api/oauth/token";
 
@@ -38,6 +44,7 @@ function App() {
   const [topic, setTopic] = useState("");
   const [style, setStyle] = useState("Stoic / cinematic");
   const [duration, setDuration] = useState("45 seconds");
+  const [videoModel, setVideoModel] = useState("google/veo-3.1-fast");
   const [projects, setProjects] = useState(() => {
     try { return JSON.parse(localStorage.getItem("stoicky-projects")) || seedProjects; } catch { return seedProjects; }
   });
@@ -153,7 +160,7 @@ function App() {
       client_id: key,
       redirect_uri: redirectUri(),
       scope: "usage",
-      models: "openai/gpt-5.4-nano,google/veo-3.1-fast",
+      models: "openai/gpt-5.4-nano,google/veo-3.1-fast,amazon/nova-reel-v1,bytedance/seedance-2.0-fast,alibaba/wan-2.7",
       expiry: "7",
       budget: "25",
       state,
@@ -202,7 +209,7 @@ function App() {
         body: JSON.stringify({
           prompt: videoPrompt,
           duration: durationSeconds[duration],
-          model: "google/veo-3.1-fast"
+          model: videoModel
         })
       });
 
@@ -282,6 +289,7 @@ function App() {
               <div className="field-row">
                 <div><label>Visual style</label><select value={style} onChange={e => setStyle(e.target.value)}><option>Stoic / cinematic</option><option>Dark documentary</option><option>Minimal luxury</option><option>Motivational</option></select></div>
                 <div><label>Duration</label><select value={duration} onChange={e => setDuration(e.target.value)}><option>30 seconds</option><option>45 seconds</option><option>60 seconds</option></select></div>
+                <div><label>Video model</label><select value={videoModel} onChange={e => setVideoModel(e.target.value)}>{Object.entries(videoModels).map(([name,id]) => <option key={id} value={id}>{name}</option>)}</select></div>
               </div>
               {progress && <div className="progress"><span className="spinner"/><span>{progress}</span></div>}
               {notice && <div className="notice">{notice}{!userToken && <button onClick={() => setShowSettings(true)}>Open Settings</button>}</div>}
@@ -324,8 +332,9 @@ function App() {
         <button className="generate" onClick={connectPollinations} disabled={authLoading}>{authLoading ? <><span className="spinner dark"/> Connecting...</> : <><Link2 size={17}/> Connect Pollinations</>}</button>
         <button className="secondary-action" onClick={saveSettings}><Check size={14}/> Save App Key</button>
         {userToken && <button className="disconnect-btn" onClick={disconnectPollinations}><LogOut size={14}/> Disconnect</button>}
-        <label className="model-label">Video model</label>
-        <input value="google/veo-3.1-fast" readOnly/>
+        <label className="model-label">Default video model</label>
+        <select value={videoModel} onChange={e => setVideoModel(e.target.value)}>{Object.entries(videoModels).map(([name,id]) => <option key={id} value={id}>{name}</option>)}</select>
+        <p className="modal-copy">Nova Reel is available through Pollinations as <b>amazon/nova-reel-v1</b>. Your approved model restrictions must include any model you select.</p>
       </div></div>}
     </div>
   );
