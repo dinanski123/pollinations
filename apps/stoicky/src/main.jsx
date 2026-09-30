@@ -81,6 +81,8 @@ function App() {
   const [duration, setDuration] = useState("45 seconds");
   const [videoModel, setVideoModel] = useState("google/veo-3.1-fast");
   const [voice, setVoice] = useState("rachel");
+  const [voiceProvider, setVoiceProvider] = useState("pollinations");
+  const [customVoiceId, setCustomVoiceId] = useState(() => localStorage.getItem("stoicky-elevenlabs-voice-id") || "");
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [characterImage, setCharacterImage] = useState(() => localStorage.getItem("stoicky-character-image") || "");
   const [characterName, setCharacterName] = useState(() => localStorage.getItem("stoicky-character-name") || "");
@@ -327,7 +329,7 @@ function App() {
         const audioRes = await fetch("/api/audio", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify({ input: narration, model: "elevenlabs/eleven-v3", voice })
+          body: JSON.stringify({ input: narration, model: "elevenlabs/eleven-v3", voice, provider: voiceProvider, voiceId: customVoiceId })
         });
         const audioType = audioRes.headers.get("content-type") || "";
         if (!audioRes.ok) {
@@ -422,10 +424,14 @@ function App() {
                 <div><label>Voice & narration</label><p>Generate spoken narration separately so silent video models can still have audio.</p></div>
                 <div className="audio-controls">
                   <label className="toggle"><input type="checkbox" checked={voiceEnabled} onChange={e => setVoiceEnabled(e.target.checked)}/><span/> Narration</label>
-                  <select value={voice} onChange={e => setVoice(e.target.value)} disabled={!voiceEnabled}>{Object.entries(voiceModels).map(([name,id]) => <option key={id} value={id}>{name}</option>)}</select>
+                  <select value={voiceProvider} onChange={e => setVoiceProvider(e.target.value)} disabled={!voiceEnabled}>
+                    <option value="pollinations">Pollinations voice</option>
+                    <option value="elevenlabs">Authorized custom voice</option>
+                  </select>
+                  {voiceProvider === "pollinations" ? <select value={voice} onChange={e => setVoice(e.target.value)} disabled={!voiceEnabled}>{Object.entries(voiceModels).map(([name,id]) => <option key={id} value={id}>{name}</option>)}</select> : <input className="voice-id" value={customVoiceId} onChange={e => { setCustomVoiceId(e.target.value); localStorage.setItem("stoicky-elevenlabs-voice-id", e.target.value); }} placeholder="ElevenLabs voice ID"/>}
                 </div>
                 {audioUrl && <audio controls src={audioUrl} className="audio-player"/>}
-                <small>For a person’s actual cloned voice, we’ll add an authorized voice-cloning provider separately. Pollinations’ current TTS API provides preset voices; its model-publishing docs do not support voice cloning.</small>
+                <small>For an actual person’s voice, use an authorized/shared ElevenLabs voice ID. The ElevenLabs API key stays server-side in Cloudflare; the person must create/verify or otherwise authorize the voice for use.</small>
               </div>
               {progress && <div className="progress"><span className="spinner"/><span>{progress}</span></div>}
               {notice && <div className="notice">{notice}{!userToken && <button onClick={() => setShowSettings(true)}>Open Settings</button>}</div>}
