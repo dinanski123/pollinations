@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
 import { createRoot } from "react-dom/client";
-import { ArrowRight, Check, ChevronDown, ExternalLink, Film, Image as ImageIcon, Layers3, Link2, LogOut, Play, Plus, Sparkles, Wand2, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, ExternalLink, Film, Image as ImageIcon, Layers3, Link2, LogOut, Play, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import "./styles.css";
 
 const seedProjects = [
@@ -270,6 +270,22 @@ function App() {
     setCharacterName("");
   };
 
+  const deleteProject = project => {
+    const confirmed = window.confirm(`Delete “${project.title}”? This removes the project from this browser’s Stoicky library.`);
+    if (!confirmed) return;
+
+    [project.videoUrl, project.audioUrl].forEach(url => {
+      if (typeof url === "string" && url.startsWith("blob:")) {
+        try { URL.revokeObjectURL(url); } catch {}
+      }
+    });
+
+    setProjects(current => current.filter(item => item.id !== project.id));
+    if (videoUrl === project.videoUrl) setVideoUrl("");
+    if (audioUrl === project.audioUrl) setAudioUrl("");
+    setNotice("Project deleted.");
+  };
+
   const generate = async () => {
     if (!topic.trim()) { setNotice("Add a topic first."); return; }
     if (!userToken) { setNotice("Connect Pollinations before generating a video."); return; }
@@ -456,7 +472,7 @@ function App() {
             <div className="project-toolbar"><p>{projects.length} videos</p><button className="generate compact" onClick={() => setView("create")}><Plus size={16}/> New video</button></div>
             <div className="project-grid">{projects.map(p => <article className="project-card" key={p.id}>
               <div className="thumb" style={{backgroundImage:'url("' + p.image + '")'}}><span className={"status " + (p.status === "Ready" ? "ready" : "")}>{p.status}</span>{p.videoUrl ? <button className="play" onClick={() => { setVideoUrl(p.videoUrl); setAudioUrl(p.audioUrl || ""); setView("create"); }}><Play size={18} fill="currentColor"/></button> : <button className="play"><Play size={18} fill="currentColor"/></button>}</div>
-              <div className="project-info"><h3>{p.title}</h3><div><span>{p.scenes} scenes</span><span>·</span><span>{p.updated}</span></div>{p.videoUrl && <a className="watch-link" href={p.videoUrl} target="_blank" rel="noreferrer">Open video <ArrowRight size={12}/></a>}{p.audioUrl && <a className="watch-link" href={p.audioUrl} target="_blank" rel="noreferrer">Open narration <ArrowRight size={12}/></a>}</div>
+              <div className="project-info"><div className="project-title-row"><h3>{p.title}</h3><button className="delete-project" title="Delete project" aria-label={"Delete " + p.title} onClick={() => deleteProject(p)}><Trash2 size={14}/></button></div><div><span>{p.scenes} scenes</span><span>·</span><span>{p.updated}</span></div>{p.videoUrl && <a className="watch-link" href={p.videoUrl} target="_blank" rel="noreferrer">Open video <ArrowRight size={12}/></a>}{p.audioUrl && <a className="watch-link" href={p.audioUrl} target="_blank" rel="noreferrer">Open narration <ArrowRight size={12}/></a>}</div>
             </article>)}</div>
           </section>
         )}
