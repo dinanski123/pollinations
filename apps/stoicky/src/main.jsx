@@ -375,7 +375,7 @@ function App() {
         <div className="modal-head"><h2>Pollinations</h2><button onClick={() => setShowSettings(false)}><X size={18}/></button></div>
         <label>Pollinations App Key</label>
         <input type="text" value={appKey} onChange={e => setAppKey(e.target.value)} placeholder="pk_..." autoComplete="off"/>
-        <p className="modal-copy">Your publishable <b>pk_</b> App Key identifies Stoicky. When you connect, Pollinations asks you to approve a Pollen budget and returns a temporary user-authorized <b>sk_</b> token. Stoicky keeps that token in this browser session only.</p>
+        <p className="modal-copy">Your publishable <b>pk_</b> App Key identifies Stoicky. When you connect, Pollinations asks you to approve a Pollen budget and returns a temporary user-authorized <b>sk_</b> token. Stoicky keeps that token in this browser session only.</p><p className="modal-copy"><b>Important:</b> the App Key must permit at least one text model for script generation and the video model you want to use. Stoicky no longer hard-restricts the OAuth request to a fixed model list; the permissions on your App Key control access.</p>
         {authError && <div className="notice">{authError}</div>}
         <button className="generate" onClick={connectPollinations} disabled={authLoading}>{authLoading ? <><span className="spinner dark"/> Connecting...</> : <><Link2 size={17}/> Connect Pollinations</>}</button>
         <button className="secondary-action" onClick={saveSettings}><Check size={14}/> Save App Key</button>
