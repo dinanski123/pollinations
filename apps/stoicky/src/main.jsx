@@ -41,6 +41,9 @@ async function createPkceChallenge(verifier) {
 
 function App() {
   const [view, setView] = useState("create");
+  const [quests, setQuests] = useState(null);
+  const [questLoading, setQuestLoading] = useState(false);
+  const [questError, setQuestError] = useState("");
   const [topic, setTopic] = useState("");
   const [style, setStyle] = useState("Stoic / cinematic");
   const [duration, setDuration] = useState("45 seconds");
@@ -171,6 +174,22 @@ function App() {
     window.location.href = POLLINATIONS_AUTHORIZE_URL + "?" + params.toString();
   };
 
+  const loadQuests = async () => {
+    if (!userToken) { setNotice("Connect Pollinations to view your quests."); return; }
+    setQuestLoading(true);
+    setQuestError("");
+    try {
+      const response = await fetch("/api/quests", { headers: authHeaders() });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not load Pollinations quests.");
+      setQuests(data);
+    } catch (error) {
+      setQuestError(error.message || "Could not load quests.");
+    } finally {
+      setQuestLoading(false);
+    }
+  };
+
   const disconnectPollinations = () => {
     sessionStorage.removeItem("stoicky-pollinations-token");
     setUserToken("");
@@ -260,6 +279,7 @@ function App() {
         <nav>
           <button className={"nav-item " + (view === "projects" ? "active" : "")} onClick={() => setView("projects")}><Film size={17}/> Projects</button>
           <button className={"nav-item " + (view === "templates" ? "active" : "")} onClick={() => setView("templates")}><Layers3 size={17}/> Templates</button>
+          <button className={"nav-item " + (view === "quests" ? "active" : "")} onClick={() => { setView("quests"); loadQuests(); }}><Sparkles size={17}/> Pollen & Quests</button>
         </nav>
         <div className="sidebar-bottom">
           <div className="usage"><div><span>Generation status</span><strong>{busy ? "WORKING" : "READY"}</strong></div><div className="meter"><i style={{width: busy ? "45%" : "100%"}}/></div><small>{userToken ? "Pollinations wallet connected" : "Connect Pollinations to generate"}</small></div>
@@ -270,7 +290,7 @@ function App() {
 
       <main className="main">
         <header className="topbar">
-          <div><span className="eyebrow">AI VIDEO STUDIO</span><h1>{view === "create" ? "Create a video" : view === "projects" ? "Your projects" : "Templates"}</h1></div>
+          <div><span className="eyebrow">AI VIDEO STUDIO</span><h1>{view === "create" ? "Create a video" : view === "projects" ? "Your projects" : view === "quests" ? "Pollen & Quests" : "Templates"}</h1></div>
           <div className="top-actions">
             <button className={"connect-pill " + (userToken ? "connected" : "")} onClick={userToken ? disconnectPollinations : connectPollinations} disabled={authLoading}>
               {authLoading ? <span className="spinner"/> : userToken ? <><Check size={13}/> Connected</> : <><Link2 size={13}/> Connect Pollinations</>}
@@ -315,6 +335,34 @@ function App() {
               <div className="thumb" style={{backgroundImage:'url("' + p.image + '")'}}><span className={"status " + (p.status === "Ready" ? "ready" : "")}>{p.status}</span>{p.videoUrl ? <button className="play" onClick={() => { setVideoUrl(p.videoUrl); setView("create"); }}><Play size={18} fill="currentColor"/></button> : <button className="play"><Play size={18} fill="currentColor"/></button>}</div>
               <div className="project-info"><h3>{p.title}</h3><div><span>{p.scenes} scenes</span><span>·</span><span>{p.updated}</span></div>{p.videoUrl && <a className="watch-link" href={p.videoUrl} target="_blank" rel="noreferrer">Open video <ArrowRight size={12}/></a>}</div>
             </article>)}</div>
+          </section>
+        )}
+
+        {view === "quests" && (
+          <section className="quests">
+            <div className="panel quest-hero">
+              <div><span className="eyebrow">POLLINATIONS</span><h2>Earn free Pollen through real usage.</h2><p>Stoicky can show your current quest status and help you complete eligible activities. Rewards are claimed in Pollinations, not automatically by Stoicky.</p></div>
+              <button className="secondary-action quest-refresh" onClick={loadQuests} disabled={questLoading}>{questLoading ? "Refreshing..." : "Refresh quests"}</button>
+            </div>
+            {!userToken ? <div className="panel empty-state"><Sparkles size={24}/><h3>Connect Pollinations first</h3><p>Connect your Pollinations account so Stoicky can read your quest status.</p><button className="generate compact" onClick={connectPollinations}><Link2 size={15}/> Connect Pollinations</button></div> :
+              questError ? <div className="notice">{questError}</div> :
+              !quests ? <div className="panel empty-state"><span className="spinner"/><p>Loading your quests...</p></div> :
+              <div className="quest-grid">
+                {(() => {
+                  const list = Array.isArray(quests) ? quests : (quests.quests || quests.data || []);
+                  return list.map((q, i) => {
+                    const completed = Boolean(q.completed || q.claimed || q.status === "completed" || q.status === "claimed");
+                    const claimable = Boolean(q.claimable || q.status === "claimable");
+                    return <article className={"panel quest-card " + (completed ? "done" : "")} key={q.id || q.questId || i}>
+                      <div className="quest-card-top"><span className={"quest-state " + (completed ? "done" : claimable ? "claimable" : "")}>{completed ? "COMPLETED" : claimable ? "CLAIMABLE" : "OPEN"}</span><strong>+{q.reward ?? q.rewardAmount ?? q.pollen ?? "?"} Pollen</strong></div>
+                      <h3>{q.title || q.name || q.description || "Pollinations Quest"}</h3>
+                      <p>{q.description || q.instructions || "Complete the qualifying activity shown in Pollinations."}</p>
+                      {claimable && <a className="watch-link" href="https://enter.pollinations.ai/quests" target="_blank" rel="noreferrer">Claim in Pollinations <ArrowRight size={12}/></a>}
+                    </article>;
+                  });
+                })()}
+              </div>}
+            <div className="panel quest-note"><strong>Keep it legitimate.</strong><span>Stoicky will only surface quests and use its normal AI features. It will not spam requests or manufacture activity just to farm rewards.</span><a href="https://enter.pollinations.ai/quests" target="_blank" rel="noreferrer">Open Quest Center <ArrowRight size={12}/></a></div>
           </section>
         )}
 
