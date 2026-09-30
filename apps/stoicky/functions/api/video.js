@@ -59,7 +59,15 @@ export async function onRequestPost({ request, env }) {
         const urls = [...content.matchAll(/https?:\\/\\/[^\\s)]+/g)].map(m => m[0]);
         const url = data?.data?.[0]?.url || data?.url || urls[0] || "";
         if (!url) return json({ error: "The video model returned no video URL." }, 502);
-        return json({ url, raw: data });
+        const media = await fetch(url);
+        if (!media.ok) return json({ error: "Video was generated but could not be downloaded from the provider." }, 502);
+        return new Response(media.body, {
+          status: 200,
+          headers: {
+            "Content-Type": media.headers.get("content-type") || "video/mp4",
+            "Cache-Control": "no-store"
+          }
+        });
       }
       return json(data);
     }
