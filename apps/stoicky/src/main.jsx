@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { fetchFile, toBlobURL } from "@ffmpeg/util";
 import { createRoot } from "react-dom/client";
 import { ArrowRight, Check, ChevronDown, ExternalLink, Film, Image as ImageIcon, Layers3, Link2, LogOut, Play, Plus, Sparkles, Wand2, X } from "lucide-react";
 import "./styles.css";
@@ -233,6 +235,32 @@ function App() {
     }
   };
 
+  const muxVideoAndAudio = async (videoSource, audioSource) => {
+    const ffmpeg = new FFmpeg();
+    setProgress("Loading browser video mixer (first use is about 30 MB)...");
+    const baseURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm")
+    });
+    setProgress("Mixing video and narration...");
+    await ffmpeg.writeFile("input.mp4", await fetchFile(videoSource));
+    await ffmpeg.writeFile("voice.mp3", await fetchFile(audioSource));
+    await ffmpeg.exec([
+      "-i", "input.mp4",
+      "-i", "voice.mp3",
+      "-map", "0:v:0",
+      "-map", "1:a:0",
+      "-c:v", "copy",
+      "-c:a", "aac",
+      "-shortest",
+      "-movflags", "+faststart",
+      "final.mp4"
+    ]);
+    const data = await ffmpeg.readFile("final.mp4");
+    return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
+  };
+
   const clearCharacter = () => {
     localStorage.removeItem("stoicky-character-image");
     localStorage.removeItem("stoicky-character-name");
@@ -309,6 +337,8 @@ function App() {
         const audioBlob = await audioRes.blob();
         generatedAudioUrl = URL.createObjectURL(audioBlob);
         setAudioUrl(generatedAudioUrl);
+        setProgress("Mixing narration into the video...");
+        url = await muxVideoAndAudio(url, generatedAudioUrl);
       }
 
       const project = {
