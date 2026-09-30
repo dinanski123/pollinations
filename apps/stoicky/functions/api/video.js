@@ -56,7 +56,7 @@ export async function onRequestPost({ request, env }) {
       const data = await upstream.json();
       if (imageData) {
         const content = data?.choices?.[0]?.message?.content || "";
-        const urls = [...content.matchAll(/https?:\\/\\/[^\\s)]+/g)].map(m => m[0]);
+        const urls = [...content.matchAll(/https?:\/\/[^\s)]+/g)].map(m => m[0]);
         const url = data?.data?.[0]?.url || data?.url || urls[0] || "";
         if (!url) return json({ error: "The video model returned no video URL." }, 502);
         const media = await fetch(url);
