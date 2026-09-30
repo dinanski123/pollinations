@@ -455,8 +455,8 @@ function App() {
           <section className="projects">
             <div className="project-toolbar"><p>{projects.length} videos</p><button className="generate compact" onClick={() => setView("create")}><Plus size={16}/> New video</button></div>
             <div className="project-grid">{projects.map(p => <article className="project-card" key={p.id}>
-              <div className="thumb" style={{backgroundImage:'url("' + p.image + '")'}}><span className={"status " + (p.status === "Ready" ? "ready" : "")}>{p.status}</span>{p.videoUrl ? <button className="play" onClick={() => { setVideoUrl(p.videoUrl); setView("create"); }}><Play size={18} fill="currentColor"/></button> : <button className="play"><Play size={18} fill="currentColor"/></button>}</div>
-              <div className="project-info"><h3>{p.title}</h3><div><span>{p.scenes} scenes</span><span>·</span><span>{p.updated}</span></div>{p.videoUrl && <a className="watch-link" href={p.videoUrl} target="_blank" rel="noreferrer">Open video <ArrowRight size={12}/></a>}</div>
+              <div className="thumb" style={{backgroundImage:'url("' + p.image + '")'}}><span className={"status " + (p.status === "Ready" ? "ready" : "")}>{p.status}</span>{p.videoUrl ? <button className="play" onClick={() => { setVideoUrl(p.videoUrl); setAudioUrl(p.audioUrl || ""); setView("create"); }}><Play size={18} fill="currentColor"/></button> : <button className="play"><Play size={18} fill="currentColor"/></button>}</div>
+              <div className="project-info"><h3>{p.title}</h3><div><span>{p.scenes} scenes</span><span>·</span><span>{p.updated}</span></div>{p.videoUrl && <a className="watch-link" href={p.videoUrl} target="_blank" rel="noreferrer">Open video <ArrowRight size={12}/></a>}{p.audioUrl && <a className="watch-link" href={p.audioUrl} target="_blank" rel="noreferrer">Open narration <ArrowRight size={12}/></a>}</div>
             </article>)}</div>
           </section>
         )}
