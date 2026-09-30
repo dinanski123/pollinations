@@ -1,13 +1,1 @@
-# Stoicky
-
-A Stoicky-inspired AI video automation interface built inside the dinanski123/pollinations fork.
-
-## Local development
-
-cd apps/stoicky
-npm install
-npm run dev
-
-For Vercel, set the project Root Directory to apps/stoicky and use the default Vite build settings.
-
-The UI is self-contained so it can evolve independently from the main Pollinations web application.
+# Stoicky\n\nA Stoicky-inspired AI video studio built inside the `dinanski123/pollinations` repository.\n\n## Cloudflare Pages\n\n- Root directory: `apps/stoicky`\n- Build command: `npm run build`\n- Output directory: `dist`\n- Node: 22\n\nThe `functions/` directory provides same-origin API routes for Pollinations text and video generation.\n\n### Pollinations API key\n\nGeneration requires a Pollinations API key. For a private Cloudflare deployment, add a Pages environment variable/secret named:\n\n`POLLINATIONS_API_KEY`\n\nAlternatively, users can enter their own key in **Settings**; Stoicky stores that key in the local browser and sends it only to its same-origin API routes.\n\nThe current generation flow is:\n\n1. Generate a structured short-form script with Pollinations text.\n2. Turn the script into a cinematic vertical video prompt.\n3. Generate an MP4 through the Pollinations video endpoint.\n4. Show the resulting video in Stoicky and in the Projects view.\n\nPollinations video generation is synchronous, so generation can take a few minutes depending on the selected model and duration.\n\n## Local development\n\n```bash\ncd apps/stoicky\nnpm install\nnpm run dev\n```\n
