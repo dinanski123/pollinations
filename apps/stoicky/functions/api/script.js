@@ -4,6 +4,7 @@ export async function onRequestPost({ request, env }) {
     const topic = String(body.topic || "").trim();
     const style = String(body.style || "Stoic / cinematic");
     const duration = String(body.duration || "45 seconds");
+    const model = String(body.model || "openai/gpt-5.4-nano");
     const key = env.POLLINATIONS_API_KEY || request.headers.get("x-pollinations-key");
 
     if (!topic) return json({ error: "Topic is required." }, 400);
@@ -22,7 +23,7 @@ Create 6-10 scenes. Narration must be concise and spoken naturally. Visual promp
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: "openai/gpt-5.4-nano",
+        model,
         messages: [
           { role: "system", content: "You are a professional short-form video writer. Follow the requested JSON format exactly." },
           { role: "user", content: prompt }
