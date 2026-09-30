@@ -15,6 +15,16 @@ const videoModels = {
   "Seedance 2.0 Fast": "bytedance/seedance-2.0-fast",
   "Wan 2.7": "alibaba/wan-2.7"
 };
+const voiceModels = {
+  "Rachel": "rachel",
+  "Adam": "adam",
+  "Antoni": "antoni",
+  "Bella": "bella",
+  "Josh": "josh",
+  "Daniel": "daniel",
+  "Nova": "nova",
+  "Sage": "sage"
+};
 const POLLINATIONS_AUTHORIZE_URL = "https://enter.pollinations.ai/authorize";
 const POLLINATIONS_TOKEN_URL = "https://enter.pollinations.ai/api/oauth/token";
 
@@ -39,12 +49,40 @@ async function createPkceChallenge(verifier) {
   return base64Url(new Uint8Array(digest));
 }
 
+function resizeReferenceImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the reference image."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const max = 1024;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      img.onerror = () => reject(new Error("That file is not a valid image."));
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function App() {
   const [view, setView] = useState("create");
   const [topic, setTopic] = useState("");
   const [style, setStyle] = useState("Stoic / cinematic");
   const [duration, setDuration] = useState("45 seconds");
   const [videoModel, setVideoModel] = useState("google/veo-3.1-fast");
+  const [voice, setVoice] = useState("rachel");
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [characterImage, setCharacterImage] = useState(() => localStorage.getItem("stoicky-character-image") || "");
+  const [characterName, setCharacterName] = useState(() => localStorage.getItem("stoicky-character-name") || "");
+  const [audioUrl, setAudioUrl] = useState("");
   const [projects, setProjects] = useState(() => {
     try { return JSON.parse(localStorage.getItem("stoicky-projects")) || seedProjects; } catch { return seedProjects; }
   });
@@ -178,6 +216,30 @@ function App() {
 
   const authHeaders = () => userToken ? { "x-pollinations-key": userToken } : {};
 
+  const handleCharacterUpload = async event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      if (!file.type.startsWith("image/")) throw new Error("Choose a JPG or PNG image.");
+      const dataUrl = await resizeReferenceImage(file);
+      if (dataUrl.length > 2_000_000) throw new Error("Reference image is still too large. Choose a smaller photo.");
+      setCharacterImage(dataUrl);
+      localStorage.setItem("stoicky-character-image", dataUrl);
+      setNotice("Character reference saved in this browser.");
+    } catch (error) {
+      setNotice(error.message || "Could not save the character reference.");
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const clearCharacter = () => {
+    localStorage.removeItem("stoicky-character-image");
+    localStorage.removeItem("stoicky-character-name");
+    setCharacterImage("");
+    setCharacterName("");
+  };
+
   const generate = async () => {
     if (!topic.trim()) { setNotice("Add a topic first."); return; }
     if (!userToken) { setNotice("Connect Pollinations before generating a video."); return; }
@@ -185,6 +247,7 @@ function App() {
     setBusy(true);
     setNotice("");
     setVideoUrl("");
+    setAudioUrl("");
 
     try {
       setProgress("Writing script...");
@@ -208,7 +271,8 @@ function App() {
         body: JSON.stringify({
           prompt: videoPrompt,
           duration: durationSeconds[duration],
-          model: videoModel
+          model: videoModel,
+          imageData: characterImage || ""
         })
       });
 
@@ -228,6 +292,25 @@ function App() {
         url = URL.createObjectURL(blob);
       }
 
+      let generatedAudioUrl = "";
+      if (voiceEnabled) {
+        setProgress("Generating narration...");
+        const narration = [script.hook, ...(script.scenes || []).map(scene => scene.narration)].filter(Boolean).join(" ");
+        const audioRes = await fetch("/api/audio", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ input: narration, model: "elevenlabs/eleven-v3", voice })
+        });
+        const audioType = audioRes.headers.get("content-type") || "";
+        if (!audioRes.ok) {
+          const errorData = audioType.includes("json") ? await audioRes.json() : { error: await audioRes.text() };
+          throw new Error(errorData.error || "Narration generation failed.");
+        }
+        const audioBlob = await audioRes.blob();
+        generatedAudioUrl = URL.createObjectURL(audioBlob);
+        setAudioUrl(generatedAudioUrl);
+      }
+
       const project = {
         id: Date.now(),
         title: script.title || topic.trim().slice(0, 54),
@@ -236,12 +319,15 @@ function App() {
         updated: "Just now",
         image: seedProjects[0].image,
         videoUrl: url,
+        audioUrl: generatedAudioUrl,
+        characterImage,
+        voice,
         script
       };
 
       setProjects(p => [project, ...p]);
       setVideoUrl(url);
-      setProgress("Video ready.");
+      setProgress(voiceEnabled ? "Video and narration ready." : "Video ready.");
       setView("projects");
     } catch (error) {
       setNotice(error.message || "Generation failed.");
@@ -282,7 +368,7 @@ function App() {
         {view === "create" && (
           <section className="create-grid">
             <div className="panel composer">
-              <div className="panel-head"><div><h2>Turn an idea into a video</h2><p>Stoicky writes the script and sends the finished prompt to Pollinations video generation.</p></div><Wand2 size={20}/></div>
+              <div className="panel-head"><div><h2>Turn an idea into a video</h2><p>Build a cinematic video with an optional real-person reference and generated narration.</p></div><Wand2 size={20}/></div>
               <label>What should the video be about?</label>
               <textarea value={topic} onChange={e => setTopic(e.target.value)} placeholder="e.g. 5 rules to become mentally stronger..." rows="5"/>
               <div className="examples"><span>Try:</span><button onClick={() => setTopic("5 stoic rules for staying calm under pressure")}>Stoic rules</button><button onClick={() => setTopic("Why discipline beats motivation every time")}>Discipline</button><button onClick={() => setTopic("3 habits that quietly change your life")}>Habits</button></div>
@@ -290,6 +376,26 @@ function App() {
                 <div><label>Visual style</label><select value={style} onChange={e => setStyle(e.target.value)}><option>Stoic / cinematic</option><option>Dark documentary</option><option>Minimal luxury</option><option>Motivational</option></select></div>
                 <div><label>Duration</label><select value={duration} onChange={e => setDuration(e.target.value)}><option>30 seconds</option><option>45 seconds</option><option>60 seconds</option></select></div>
                 <div><label>Video model</label><select value={videoModel} onChange={e => setVideoModel(e.target.value)}>{Object.entries(videoModels).map(([name,id]) => <option key={id} value={id}>{name}</option>)}</select></div>
+              </div>
+              <div className="character-box">
+                <div className="character-head"><div><label>Person / face reference</label><p>Upload a photo only when you have permission to use the person’s likeness.</p></div>{characterImage && <button className="clear-character" onClick={clearCharacter}>Remove</button>}</div>
+                <div className="character-controls">
+                  {characterImage ? <img src={characterImage} className="character-thumb" alt="Saved face reference"/> : <div className="character-placeholder">No person selected</div>}
+                  <div className="character-inputs">
+                    <input value={characterName} onChange={e => { setCharacterName(e.target.value); localStorage.setItem("stoicky-character-name", e.target.value); }} placeholder="Person name (optional)"/>
+                    <label className="upload-button">Choose photo<input type="file" accept="image/png,image/jpeg" onChange={handleCharacterUpload}/></label>
+                  </div>
+                </div>
+                {characterImage && <small>Face reference is sent only with the video request. Compatible video models may use it as a starting/reference image.</small>}
+              </div>
+              <div className="audio-box">
+                <div><label>Voice & narration</label><p>Generate spoken narration separately so silent video models can still have audio.</p></div>
+                <div className="audio-controls">
+                  <label className="toggle"><input type="checkbox" checked={voiceEnabled} onChange={e => setVoiceEnabled(e.target.checked)}/><span/> Narration</label>
+                  <select value={voice} onChange={e => setVoice(e.target.value)} disabled={!voiceEnabled}>{Object.entries(voiceModels).map(([name,id]) => <option key={id} value={id}>{name}</option>)}</select>
+                </div>
+                {audioUrl && <audio controls src={audioUrl} className="audio-player"/>}
+                <small>For a person’s actual cloned voice, we’ll add an authorized voice-cloning provider separately. Pollinations’ current TTS API provides preset voices; its model-publishing docs do not support voice cloning.</small>
               </div>
               {progress && <div className="progress"><span className="spinner"/><span>{progress}</span></div>}
               {notice && <div className="notice">{notice}{!userToken && <button onClick={() => setShowSettings(true)}>Open Settings</button>}</div>}
@@ -303,6 +409,7 @@ function App() {
               <div className="preview-card">
                 {videoUrl ? <video className="preview-image video-preview" src={videoUrl} controls playsInline/> : <div className="preview-image" style={{backgroundImage:'url("' + seedProjects[0].image + '")'}}><button><Play size={17} fill="currentColor"/></button></div>}
                 <div><span>{videoUrl ? "GENERATED VIDEO" : "LIVE PREVIEW"}</span><strong>Vertical · 9:16</strong></div>
+                {audioUrl && <div className="audio-preview"><span>NARRATION</span><audio controls src={audioUrl}/></div>}
               </div>
             </div>
           </section>
