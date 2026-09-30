@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
 import { createRoot } from "react-dom/client";
@@ -7,29 +7,35 @@ import "./styles.css";
 import { deleteAssets, getAsset, requestPersistentStorage, safeFilename, saveAsset } from "./storage";
 
 const seedProjects = [
-  { id: 1, title: "The discipline nobody talks about", status: "Preview", scenes: 8, updated: "Example", image: "https://image.pollinations.ai/prompt/cinematic%20stoic%20man%20walking%20alone%20at%20night%20rain%20vertical?width=420&height=620&nologo=true" },
-  { id: 2, title: "7 rules for a stronger mind", status: "Example", scenes: 6, updated: "Example", image: "https://image.pollinations.ai/prompt/dark%20cinematic%20mountain%20silhouette%20sunrise%20vertical?width=420&height=620&nologo=true" }
+  { id: 1, title: "The discipline nobody talks about", status: "Preview", scenes: 8, updated: "Example", image: "https://image.pollinations.ai/prompt/cinematic%20stoic%20man%20walking%20alone%20at%20night%20rain%20vertical?width=420&height=620&nologo=true", example: true },
+  { id: 2, title: "7 rules for a stronger mind", status: "Example", scenes: 6, updated: "Example", image: "https://image.pollinations.ai/prompt/dark%20cinematic%20mountain%20silhouette%20sunrise%20vertical?width=420&height=620&nologo=true", example: true }
 ];
 
 const durationSeconds = { "30 seconds": 30, "45 seconds": 45, "60 seconds": 60 };
-const videoModels = {
-  "Google Veo 3.1 Fast": "google/veo-3.1-fast",
-  "Amazon Nova Reel": "amazon/nova-reel-v1",
-  "Seedance 2.0 Fast": "bytedance/seedance-2.0-fast",
-  "Wan 2.7": "alibaba/wan-2.7"
-};
 const voiceModels = {
-  "Rachel": "rachel",
-  "Adam": "adam",
-  "Antoni": "antoni",
-  "Bella": "bella",
-  "Josh": "josh",
-  "Daniel": "daniel",
-  "Nova": "nova",
-  "Sage": "sage"
+  Rachel: "rachel", Adam: "adam", Antoni: "antoni", Bella: "bella",
+  Josh: "josh", Daniel: "daniel", Nova: "nova", Sage: "sage"
 };
+const FALLBACK_VIDEO_MODELS = [
+  { id: "google/veo-3.1-fast", title: "Google Veo 3.1 Fast", input_modalities: ["text"] },
+  { id: "google/gemini-omni-1.1-flash", title: "Google Gemini Omni 1.1 Flash", input_modalities: ["text", "image"] },
+  { id: "bytedance/seedance-2.0", title: "Seedance 2.0", input_modalities: ["text", "image"] },
+  { id: "bytedance/seedance-2.0-fast", title: "Seedance 2.0 Fast", input_modalities: ["text", "image"] },
+  { id: "alibaba/wan-2.7", title: "Wan 2.7", input_modalities: ["text", "image"] },
+  { id: "x-ai/grok-imagine-video-1.5", title: "Grok Imagine Video 1.5", input_modalities: ["text", "image"] },
+  { id: "amazon/nova-reel-v1", title: "Amazon Nova Reel", input_modalities: ["text"] }
+];
+const CHARACTER_ASSET_ID = "stoicky-character-reference";
 const POLLINATIONS_AUTHORIZE_URL = "https://enter.pollinations.ai/authorize";
 const POLLINATIONS_TOKEN_URL = "https://enter.pollinations.ai/api/oauth/token";
+
+function sceneCountFor(duration) {
+  return duration === "30 seconds" ? 5 : duration === "45 seconds" ? 8 : 10;
+}
+
+function modelSupportsImage(model) {
+  return (model?.input_modalities || model?.inputModalities || []).map(String).map(x => x.toLowerCase()).includes("image");
+}
 
 function redirectUri() {
   return window.location.origin + "/callback";
@@ -66,7 +72,7 @@ function resizeReferenceImage(file) {
         canvas.height = Math.max(1, Math.round(img.height * scale));
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.82));
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Could not prepare the reference image.")), "image/jpeg", 0.82);
       };
       img.onerror = () => reject(new Error("That file is not a valid image."));
       img.src = reader.result;
@@ -75,17 +81,42 @@ function resizeReferenceImage(file) {
   });
 }
 
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error("Could not read the reference image."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function normalizeModels(data) {
+  const list = Array.isArray(data?.models) ? data.models : [];
+  return list
+    .map(model => ({
+      id: String(model.id || "").trim(),
+      title: String(model.title || model.display_name || model.displayName || model.name || model.id || "").trim(),
+      input_modalities: [
+        ...(Array.isArray(model.input_modalities) ? model.input_modalities : []),
+        ...(Array.isArray(model.inputModalities) ? model.inputModalities : [])
+      ]
+    }))
+    .filter(model => model.id && model.title);
+}
+
 function App() {
   const [view, setView] = useState("create");
   const [topic, setTopic] = useState("");
   const [style, setStyle] = useState("Stoic / cinematic");
   const [duration, setDuration] = useState("45 seconds");
   const [videoModel, setVideoModel] = useState("google/veo-3.1-fast");
+  const [videoModels, setVideoModels] = useState(FALLBACK_VIDEO_MODELS);
+  const [modelsLive, setModelsLive] = useState(false);
   const [voice, setVoice] = useState("rachel");
   const [voiceProvider, setVoiceProvider] = useState("pollinations");
   const [customVoiceId, setCustomVoiceId] = useState(() => localStorage.getItem("stoicky-elevenlabs-voice-id") || "");
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [characterImage, setCharacterImage] = useState(() => localStorage.getItem("stoicky-character-image") || "");
+  const [characterImage, setCharacterImage] = useState("");
   const [characterName, setCharacterName] = useState(() => localStorage.getItem("stoicky-character-name") || "");
   const [audioUrl, setAudioUrl] = useState("");
   const [projects, setProjects] = useState(() => {
@@ -100,19 +131,48 @@ function App() {
   const [progress, setProgress] = useState("");
   const [notice, setNotice] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
+  const ffmpegRef = useRef(null);
+
+  const selectedModel = videoModels.find(model => model.id === videoModel) || { id: videoModel, title: videoModel, input_modalities: ["text"] };
 
   useEffect(() => {
-    localStorage.setItem("stoicky-projects", JSON.stringify(projects.map(({ videoUrl, audioUrl, ...project }) => project)));
+    const stored = localStorage.getItem("stoicky-character-image");
+    (async () => {
+      try {
+        if (stored) {
+          await saveAsset(CHARACTER_ASSET_ID, await fetch(stored).then(r => r.blob()), "character-reference.jpg");
+          localStorage.removeItem("stoicky-character-image");
+        }
+        const asset = await getAsset(CHARACTER_ASSET_ID);
+        if (asset) setCharacterImage(URL.createObjectURL(asset.blob));
+      } catch {
+        setNotice("Saved character reference could not be loaded. You can choose it again.");
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("stoicky-projects", JSON.stringify(projects.map(({ videoUrl, audioUrl, characterImage: _characterImage, ...project }) => project)));
   }, [projects]);
 
+  useEffect(() => { requestPersistentStorage(); }, []);
+
   useEffect(() => {
-    requestPersistentStorage();
+    fetch("/api/models")
+      .then(response => response.json())
+      .then(data => {
+        const models = normalizeModels(data);
+        if (!models.length) return;
+        setVideoModels(models);
+        setModelsLive(Boolean(data.live));
+        setVideoModel(current => models.some(model => model.id === current) ? current : models[0].id);
+      })
+      .catch(() => setModelsLive(false));
   }, []);
 
   useEffect(() => {
     const finishOAuth = async () => {
       if (window.location.pathname !== "/callback") return;
-
       const params = new URLSearchParams(window.location.search);
       const code = params.get("code");
       const state = params.get("state");
@@ -126,7 +186,6 @@ function App() {
         window.history.replaceState({}, "", "/");
         return;
       }
-
       if (!state || !expectedState || state !== expectedState || !verifier || !storedAppKey) {
         setAuthError("Pollinations authorization could not be verified. Please connect again.");
         window.history.replaceState({}, "", "/");
@@ -147,9 +206,7 @@ function App() {
           })
         });
         const data = await response.json();
-        if (!response.ok || !data.access_token) {
-          throw new Error(data.error_description || data.error || "Pollinations authorization failed.");
-        }
+        if (!response.ok || !data.access_token) throw new Error(data.error_description || data.error || "Pollinations authorization failed.");
         sessionStorage.setItem("stoicky-pollinations-token", data.access_token);
         setUserToken(data.access_token);
         setAuthError("");
@@ -163,7 +220,6 @@ function App() {
         window.history.replaceState({}, "", "/");
       }
     };
-
     finishOAuth();
   }, []);
 
@@ -182,23 +238,13 @@ function App() {
 
   const connectPollinations = async () => {
     const key = appKey.trim();
-    if (!key) {
-      setShowSettings(true);
-      setNotice("Enter your Pollinations pk_ App Key first.");
-      return;
-    }
-    if (!key.startsWith("pk_")) {
-      setNotice("That does not look like a Pollinations App Key. It should start with pk_.");
-      setShowSettings(true);
-      return;
-    }
+    if (!key) { setShowSettings(true); setNotice("Enter your Pollinations pk_ App Key first."); return; }
+    if (!key.startsWith("pk_")) { setNotice("That does not look like a Pollinations App Key. It should start with pk_."); setShowSettings(true); return; }
 
     localStorage.setItem("stoicky-pollinations-app-key", key);
-
     const verifier = randomToken(48);
     const state = randomToken(24);
     const challenge = await createPkceChallenge(verifier);
-
     sessionStorage.setItem("stoicky-pollinations-verifier", verifier);
     sessionStorage.setItem("stoicky-pollinations-state", state);
 
@@ -213,7 +259,6 @@ function App() {
       code_challenge: challenge,
       code_challenge_method: "S256"
     });
-
     window.location.href = POLLINATIONS_AUTHORIZE_URL + "?" + params.toString();
   };
 
@@ -230,11 +275,16 @@ function App() {
     if (!file) return;
     try {
       if (!file.type.startsWith("image/")) throw new Error("Choose a JPG or PNG image.");
-      const dataUrl = await resizeReferenceImage(file);
-      if (dataUrl.length > 2_000_000) throw new Error("Reference image is still too large. Choose a smaller photo.");
-      setCharacterImage(dataUrl);
-      localStorage.setItem("stoicky-character-image", dataUrl);
+      const blob = await resizeReferenceImage(file);
+      await saveAsset(CHARACTER_ASSET_ID, blob, "character-reference.jpg");
+      const previewUrl = URL.createObjectURL(blob);
+      setCharacterImage(previewUrl);
       setNotice("Character reference saved in this browser.");
+      const imageModel = videoModels.find(model => modelSupportsImage(model));
+      if (!modelSupportsImage(selectedModel) && imageModel) {
+        setVideoModel(imageModel.id);
+        setNotice(`Character reference saved. Switched to ${imageModel.title}, which accepts image input.`);
+      }
     } catch (error) {
       setNotice(error.message || "Could not save the character reference.");
     } finally {
@@ -242,40 +292,92 @@ function App() {
     }
   };
 
-  const muxVideoAndAudio = async (videoSource, audioSource) => {
-    const ffmpeg = new FFmpeg();
-    setProgress("Loading browser video mixer (first use is about 30 MB)...");
-    const baseURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm")
-    });
-    setProgress("Mixing video and narration...");
-    await ffmpeg.writeFile("input.mp4", await fetchFile(videoSource));
-    await ffmpeg.writeFile("voice.mp3", await fetchFile(audioSource));
+  const clearCharacter = async () => {
+    await deleteAssets([CHARACTER_ASSET_ID]);
+    setCharacterImage("");
+    localStorage.removeItem("stoicky-character-name");
+    setCharacterName("");
+    setNotice("Character reference removed from this browser.");
+  };
+
+  const loadFFmpeg = async () => {
+    if (ffmpegRef.current?.loaded) return ffmpegRef.current;
+    const ffmpeg = ffmpegRef.current || new FFmpeg();
+    if (!ffmpeg.loaded) {
+      setProgress("Loading browser video mixer (first use is about 30 MB)...");
+      const baseURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm")
+      });
+    }
+    ffmpegRef.current = ffmpeg;
+    return ffmpeg;
+  };
+
+  const stitchClips = async (clips, targetSeconds) => {
+    const ffmpeg = await loadFFmpeg();
+    setProgress(`Assembling ${clips.length} generated scenes in the browser...`);
+
+    const files = [];
+    for (let i = 0; i < clips.length; i++) {
+      const name = `scene-${i}.mp4`;
+      await ffmpeg.writeFile(name, await fetchFile(clips[i]));
+      files.push(name);
+    }
+
+    const filters = files.map((_, i) =>
+      `[${i}:v]scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=6,trim=duration=6,setpts=PTS-STARTPTS[v${i}]`
+    );
+    filters.push(files.map((_, i) => `[v${i}]`).join("") + `concat=n=${files.length}:v=1:a=0[outv]`);
+
     await ffmpeg.exec([
-      "-i", "input.mp4",
-      "-i", "voice.mp3",
-      "-map", "0:v:0",
-      "-map", "1:a:0",
-      "-c:v", "copy",
-      "-c:a", "aac",
-      "-shortest",
+      ...files.flatMap(name => ["-i", name]),
+      "-filter_complex", filters.join(";"),
+      "-map", "[outv]",
+      "-t", String(targetSeconds),
+      "-an",
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-crf", "23",
+      "-pix_fmt", "yuv420p",
       "-movflags", "+faststart",
-      "final.mp4"
+      "stitched.mp4"
     ]);
-    const data = await ffmpeg.readFile("final.mp4");
+
+    const data = await ffmpeg.readFile("stitched.mp4");
+    files.forEach(name => { try { ffmpeg.deleteFile(name); } catch {} });
+    try { ffmpeg.deleteFile("stitched.mp4"); } catch {}
     return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
   };
 
-  const clearCharacter = () => {
-    localStorage.removeItem("stoicky-character-image");
-    localStorage.removeItem("stoicky-character-name");
-    setCharacterImage("");
-    setCharacterName("");
+  const muxVideoAndAudio = async (videoSource, audioSource) => {
+    const ffmpeg = await loadFFmpeg();
+    setProgress("Mixing narration into the finished video...");
+    await ffmpeg.writeFile("mix-input.mp4", await fetchFile(videoSource));
+    await ffmpeg.writeFile("mix-voice.mp3", await fetchFile(audioSource));
+    await ffmpeg.exec([
+      "-i", "mix-input.mp4",
+      "-i", "mix-voice.mp3",
+      "-map", "0:v:0",
+      "-map", "1:a:0",
+      "-c:v", "copy",
+      "-af", "apad",
+      "-c:a", "aac",
+      "-shortest",
+      "-movflags", "+faststart",
+      "mixed.mp4"
+    ]);
+    const data = await ffmpeg.readFile("mixed.mp4");
+    try { ffmpeg.deleteFile("mix-input.mp4"); ffmpeg.deleteFile("mix-voice.mp3"); ffmpeg.deleteFile("mixed.mp4"); } catch {}
+    return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
   };
 
   const openProject = async project => {
+    if (!project.videoAssetId) {
+      setNotice("This is an example project; there is no local video file to open.");
+      return;
+    }
     setNotice("");
     setProgress("Loading saved project from device storage...");
     try {
@@ -284,6 +386,7 @@ function App() {
       if (!videoAsset) throw new Error("The saved video file is missing from this browser.");
       setVideoUrl(URL.createObjectURL(videoAsset.blob));
       setAudioUrl(audioAsset ? URL.createObjectURL(audioAsset.blob) : "");
+      setTopic(project.script?.title || project.title || "");
       setView("create");
       setProgress("Saved project loaded.");
     } catch (error) {
@@ -329,9 +432,9 @@ function App() {
   };
 
   const deleteProject = async project => {
+    if (project.example) return;
     const confirmed = window.confirm(`Delete “${project.title}”? This removes the project and its saved files from this browser.`);
     if (!confirmed) return;
-
     try {
       await deleteAssets([project.videoAssetId, project.audioAssetId]);
       setProjects(current => current.filter(item => item.id !== project.id));
@@ -346,6 +449,17 @@ function App() {
   const generate = async () => {
     if (!topic.trim()) { setNotice("Add a topic first."); return; }
     if (!userToken) { setNotice("Connect Pollinations before generating a video."); return; }
+    if (characterImage && !modelSupportsImage(selectedModel)) {
+      setNotice("This video model does not accept image input. Choose an image-capable model or remove the face reference.");
+      return;
+    }
+
+    const totalSeconds = durationSeconds[duration];
+    const sceneCount = sceneCountFor(duration);
+    const clipDuration = 6;
+    const scriptModel = "openai/gpt-5.4-nano";
+    let generatedClips = [];
+    let generatedAudioUrl = "";
 
     setBusy(true);
     setNotice("");
@@ -353,51 +467,56 @@ function App() {
     setAudioUrl("");
 
     try {
-      setProgress("Writing script...");
+      setProgress("Writing the scene-by-scene script...");
       const scriptRes = await fetch("/api/script", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ topic, style, duration })
+        body: JSON.stringify({ topic, style, duration, sceneCount, model: scriptModel })
       });
       const scriptData = await scriptRes.json();
       if (!scriptRes.ok) throw new Error(scriptData.error || "Script generation failed.");
-
       const script = scriptData.script;
-      setProgress("Preparing video prompt...");
-      const visual = script.scenes?.slice(0, 4).map(s => s.visual).join(". ") || topic;
-      const videoPrompt = `${style}, vertical 9:16 ${characterImage ? "on-camera person" : "faceless"} short-form video about ${script.title || topic}. ${visual}. Cinematic movement, coherent subject, dramatic lighting, no text, no logos.${characterImage ? " Keep the supplied person as the central subject and preserve their recognizable appearance." : ""}`;
 
-      setProgress("Generating video — this can take a few minutes...");
-      const videoRes = await fetch("/api/video", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({
-          prompt: videoPrompt,
-          duration: durationSeconds[duration],
-          model: videoModel,
-          imageData: characterImage || ""
-        })
-      });
+      for (let index = 0; index < sceneCount; index++) {
+        const scene = script.scenes[index];
+        const continuity = `Keep visual continuity with the previous scene. Overall style: ${style}. Vertical 9:16. No text, captions, logos or UI.`;
+        const subject = characterImage
+          ? `The supplied person is the central on-camera subject. Preserve the person's recognizable appearance and keep them consistent. ${characterName ? `The person is described as "${characterName}".` : ""}`
+          : "Use a coherent cinematic subject without showing a recognizable real person.";
+        const prompt = `${scene.visual} ${continuity} ${subject} Natural motion, deliberate camera movement, cinematic lighting, realistic texture.`;
 
-      const type = videoRes.headers.get("content-type") || "";
-      if (!videoRes.ok) {
-        const errorData = type.includes("json") ? await videoRes.json() : { error: await videoRes.text() };
-        throw new Error(errorData.error || "Video generation failed.");
-      }
+        setProgress(`Generating scene ${index + 1} of ${sceneCount} — this may take a few minutes...`);
+        const videoRes = await fetch("/api/video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({
+            prompt,
+            duration: clipDuration,
+            model: videoModel,
+            aspectRatio: "9:16",
+            imageData: characterImage ? await blobToDataUrl(await fetch(characterImage).then(r => r.blob())) : "",
+            imageInputSupported: modelSupportsImage(selectedModel)
+          })
+        });
 
-      let url = "";
-      if (type.includes("application/json")) {
-        const data = await videoRes.json();
-        url = data?.data?.[0]?.url || data?.url || "";
-        if (!url) throw new Error("Video service returned no video URL.");
-      } else {
+        const type = videoRes.headers.get("content-type") || "";
+        if (!videoRes.ok) {
+          const errorData = type.includes("json") ? await videoRes.json() : { error: await videoRes.text() };
+          throw new Error(`Scene ${index + 1} failed: ${errorData.error || "Video generation failed."}`);
+        }
         const blob = await videoRes.blob();
-        url = URL.createObjectURL(blob);
+        if (!blob.size) throw new Error(`Scene ${index + 1} returned an empty video.`);
+        const clipUrl = URL.createObjectURL(blob);
+        generatedClips.push(clipUrl);
       }
 
-      let generatedAudioUrl = "";
+      const stitchedUrl = await stitchClips(generatedClips, totalSeconds);
+      generatedClips.forEach(url => URL.revokeObjectURL(url));
+      generatedClips = [];
+      let finalUrl = stitchedUrl;
+
       if (voiceEnabled) {
-        setProgress("Generating narration...");
+        setProgress("Generating narration for the full edit...");
         const narration = [script.hook, ...(script.scenes || []).map(scene => scene.narration)].filter(Boolean).join(" ");
         const audioRes = await fetch("/api/audio", {
           method: "POST",
@@ -412,47 +531,57 @@ function App() {
         const audioBlob = await audioRes.blob();
         generatedAudioUrl = URL.createObjectURL(audioBlob);
         setAudioUrl(generatedAudioUrl);
-        setProgress("Mixing narration into the video...");
-        url = await muxVideoAndAudio(url, generatedAudioUrl);
+        finalUrl = await muxVideoAndAudio(finalUrl, generatedAudioUrl);
       }
 
       const projectId = Date.now();
       const videoAssetId = `project-${projectId}-video`;
       const audioAssetId = generatedAudioUrl ? `project-${projectId}-audio` : "";
-      setProgress("Saving finished video to device storage...");
-      await saveAsset(videoAssetId, await fetch(url).then(response => {
+      const title = script.title || topic.trim().slice(0, 54);
+
+      setProgress("Saving the finished edit to device storage...");
+      const finalBlob = await fetch(finalUrl).then(response => {
         if (!response.ok) throw new Error("Could not read the finished video for device storage.");
         return response.blob();
-      }), safeFilename(script.title || topic.trim().slice(0, 54)) + ".mp4");
+      });
+      await saveAsset(videoAssetId, finalBlob, safeFilename(title) + ".mp4");
       if (generatedAudioUrl) {
-        await saveAsset(audioAssetId, await fetch(generatedAudioUrl).then(response => response.blob()), safeFilename(script.title || topic.trim().slice(0, 54)) + "-narration.mp3");
+        const audioBlob = await fetch(generatedAudioUrl).then(response => response.blob());
+        await saveAsset(audioAssetId, audioBlob, safeFilename(title) + "-narration.mp3");
       }
 
       const project = {
         id: projectId,
-        title: script.title || topic.trim().slice(0, 54),
+        title,
         status: "Ready",
-        scenes: script.scenes?.length || 0,
+        scenes: sceneCount,
+        duration: totalSeconds,
         updated: "Just now",
         image: seedProjects[0].image,
         videoAssetId,
         audioAssetId,
-        characterImage,
         voice,
+        videoModel,
         script
       };
 
-      setProjects(p => [project, ...p]);
-      setVideoUrl(url);
-      setProgress(voiceEnabled ? "Video and narration ready." : "Video ready.");
+      setProjects(current => [project, ...current.filter(item => item.id !== projectId)]);
+      setVideoUrl(finalUrl);
+      setProgress(voiceEnabled ? `Finished ${totalSeconds}-second video with narration.` : `Finished ${totalSeconds}-second video.`);
       setView("projects");
     } catch (error) {
+      generatedClips.forEach(url => URL.revokeObjectURL(url));
       setNotice(error.message || "Generation failed.");
       setProgress("");
     } finally {
       setBusy(false);
     }
   };
+
+  const currentStep = progress.toLowerCase().includes("script") ? 0
+    : progress.toLowerCase().includes("scene") || progress.toLowerCase().includes("assembling") ? 1
+    : progress.toLowerCase().includes("narration") || progress.toLowerCase().includes("mixing") ? 2
+    : 3;
 
   return (
     <div className="app-shell">
@@ -485,14 +614,14 @@ function App() {
         {view === "create" && (
           <section className="create-grid">
             <div className="panel composer">
-              <div className="panel-head"><div><h2>Turn an idea into a video</h2><p>Build a cinematic video with an optional real-person reference and generated narration.</p></div><Wand2 size={20}/></div>
+              <div className="panel-head"><div><h2>Turn an idea into a video</h2><p>Build a real multi-scene edit with optional person reference and generated narration.</p></div><Wand2 size={20}/></div>
               <label>What should the video be about?</label>
               <textarea value={topic} onChange={e => setTopic(e.target.value)} placeholder="e.g. 5 rules to become mentally stronger..." rows="5"/>
               <div className="examples"><span>Try:</span><button onClick={() => setTopic("5 stoic rules for staying calm under pressure")}>Stoic rules</button><button onClick={() => setTopic("Why discipline beats motivation every time")}>Discipline</button><button onClick={() => setTopic("3 habits that quietly change your life")}>Habits</button></div>
               <div className="field-row">
                 <div><label>Visual style</label><select value={style} onChange={e => setStyle(e.target.value)}><option>Stoic / cinematic</option><option>Dark documentary</option><option>Minimal luxury</option><option>Motivational</option></select></div>
                 <div><label>Duration</label><select value={duration} onChange={e => setDuration(e.target.value)}><option>30 seconds</option><option>45 seconds</option><option>60 seconds</option></select></div>
-                <div><label>Video model</label><select value={videoModel} onChange={e => setVideoModel(e.target.value)}>{Object.entries(videoModels).map(([name,id]) => <option key={id} value={id}>{name}</option>)}</select></div>
+                <div><label>Video model</label><select value={videoModel} onChange={e => setVideoModel(e.target.value)}>{videoModels.map(model => <option key={model.id} value={model.id}>{model.title}</option>)}</select></div>
               </div>
               <div className="character-box">
                 <div className="character-head"><div><label>Person / face reference</label><p>Upload a photo only when you have permission to use the person’s likeness.</p></div>{characterImage && <button className="clear-character" onClick={clearCharacter}>Remove</button>}</div>
@@ -503,10 +632,10 @@ function App() {
                     <label className="upload-button">Choose photo<input type="file" accept="image/png,image/jpeg" onChange={handleCharacterUpload}/></label>
                   </div>
                 </div>
-                {characterImage && <small>Face reference is sent only with the video request. Compatible video models may use it as a starting/reference image.</small>}
+                {characterImage && <small>{modelSupportsImage(selectedModel) ? "Reference image is stored in IndexedDB and sent only with each compatible video request." : "The current model does not accept image input. Stoicky will switch to a compatible model when possible."}</small>}
               </div>
               <div className="audio-box">
-                <div><label>Voice & narration</label><p>Generate spoken narration separately so silent video models can still have audio.</p></div>
+                <div><label>Voice & narration</label><p>Generate spoken narration separately so video clips can remain video-only.</p></div>
                 <div className="audio-controls">
                   <label className="toggle"><input type="checkbox" checked={voiceEnabled} onChange={e => setVoiceEnabled(e.target.checked)}/><span/> Narration</label>
                   <select value={voiceProvider} onChange={e => setVoiceProvider(e.target.value)} disabled={!voiceEnabled}>
@@ -516,17 +645,17 @@ function App() {
                   {voiceProvider === "pollinations" ? <select value={voice} onChange={e => setVoice(e.target.value)} disabled={!voiceEnabled}>{Object.entries(voiceModels).map(([name,id]) => <option key={id} value={id}>{name}</option>)}</select> : <input className="voice-id" value={customVoiceId} onChange={e => { setCustomVoiceId(e.target.value); localStorage.setItem("stoicky-elevenlabs-voice-id", e.target.value); }} placeholder="ElevenLabs voice ID"/>}
                 </div>
                 {audioUrl && <audio controls src={audioUrl} className="audio-player"/>}
-                <small>For an actual person’s voice, use an authorized/shared ElevenLabs voice ID. The ElevenLabs API key stays server-side in Cloudflare; the person must create/verify or otherwise authorize the voice for use.</small>
+                <small>For an actual person’s voice, use an authorized/shared ElevenLabs voice ID. The ElevenLabs API key stays server-side in Cloudflare.</small>
               </div>
               {progress && <div className="progress"><span className="spinner"/><span>{progress}</span></div>}
               {notice && <div className="notice">{notice}{!userToken && <button onClick={() => setShowSettings(true)}>Open Settings</button>}</div>}
               <button className="generate" onClick={generate} disabled={busy}>{busy ? <><span className="spinner dark"/> Generating...</> : <><Sparkles size={17}/> Generate video <ArrowRight size={17}/></>}</button>
-              <p className="fineprint">Your Pollinations connection authorizes Stoicky to use the Pollen budget you approve.</p>
+              <p className="fineprint">Each scene is generated separately, then stitched and mixed in your browser. Your approved Pollinations budget pays for the AI generations.</p>
             </div>
 
             <div className="panel pipeline">
-              <div className="panel-head"><div><h2>Production pipeline</h2><p>{busy ? "Your generation is in progress." : "Everything happens in one flow."}</p></div></div>
-              {[[ "01","Script","AI writes a short-form script with a strong hook."],[ "02","Scenes","The script becomes visual direction automatically."],[ "03","Video","Pollinations generates the cinematic video."],[ "04","Review","Preview the result and keep the project." ]].map((item,i) => <div className={"step " + (busy && i === (progress?.includes("script") ? 0 : progress?.includes("video") ? 2 : 1) ? "current" : "")} key={item[0]}><div className="step-no">{item[0]}</div><div><strong>{item[1]}</strong><p>{item[2]}</p></div>{busy && i < 3 && <span className="dot"/>}</div>)}
+              <div className="panel-head"><div><h2>Production pipeline</h2><p>{busy ? "Generating real scene clips and assembling them locally." : "Script → scenes → stitch → narration → saved project."}</p></div></div>
+              {[["01","Script","AI writes the hook and exact scene plan."],["02","Scenes","Each scene becomes its own video generation."],["03","Edit","Browser FFmpeg stitches and trims the clips."],["04","Review","Narration is mixed and the project is saved."]].map((item,i) => <div className={"step " + (busy && i === currentStep ? "current" : "")} key={item[0]}><div className="step-no">{item[0]}</div><div><strong>{item[1]}</strong><p>{item[2]}</p></div>{busy && i < 3 && <span className="dot"/>}</div>)}
               <div className="preview-card">
                 {videoUrl ? <video className="preview-image video-preview" src={videoUrl} controls playsInline/> : <div className="preview-image" style={{backgroundImage:'url("' + seedProjects[0].image + '")'}}><button><Play size={17} fill="currentColor"/></button></div>}
                 <div><span>{videoUrl ? "GENERATED VIDEO" : "LIVE PREVIEW"}</span><strong>Vertical · 9:16</strong></div>
@@ -540,8 +669,8 @@ function App() {
           <section className="projects">
             <div className="project-toolbar"><p>{projects.length} videos</p><button className="generate compact" onClick={() => setView("create")}><Plus size={16}/> New video</button></div>
             <div className="project-grid">{projects.map(p => <article className="project-card" key={p.id}>
-              <div className="thumb" style={{backgroundImage:'url("' + p.image + '")'}}><span className={"status " + (p.status === "Ready" ? "ready" : "")}>{p.status}</span>{p.videoAssetId ? <button className="play" onClick={() => openProject(p)}><Play size={18} fill="currentColor"/></button> : <button className="play" onClick={() => openProject(p)}><Play size={18} fill="currentColor"/></button>}</div>
-              <div className="project-info"><div className="project-title-row"><h3>{p.title}</h3><button className="delete-project" title="Delete project" aria-label={"Delete " + p.title} onClick={() => deleteProject(p)}><Trash2 size={14}/></button></div><div><span>{p.scenes} scenes</span><span>·</span><span>{p.updated}</span></div>{p.videoAssetId && <div className="project-actions"><button className="watch-link" onClick={() => openProject(p)}>Open video <ArrowRight size={12}/></button><button className="watch-link" onClick={() => downloadProject(p)}>Download MP4 <ArrowRight size={12}/></button><button className="watch-link" onClick={() => shareProject(p)}>Share <ArrowRight size={12}/></button></div>}</div>
+              <div className="thumb" style={{backgroundImage:'url("' + p.image + '")'}}><span className={"status " + (p.status === "Ready" ? "ready" : "")}>{p.status}</span>{p.videoAssetId ? <button className="play" onClick={() => openProject(p)}><Play size={18} fill="currentColor"/></button> : <span className="play" title="Example project"><ImageIcon size={16}/></span>}</div>
+              <div className="project-info"><div className="project-title-row"><h3>{p.title}</h3>{!p.example && <button className="delete-project" title="Delete project" aria-label={"Delete " + p.title} onClick={() => deleteProject(p)}><Trash2 size={14}/></button>}</div><div><span>{p.scenes} scenes</span><span>·</span><span>{p.duration ? p.duration + " sec" : p.updated}</span></div>{p.videoAssetId && <div className="project-actions"><button className="watch-link" onClick={() => openProject(p)}>Open video <ArrowRight size={12}/></button><button className="watch-link" onClick={() => downloadProject(p)}>Download MP4 <ArrowRight size={12}/></button><button className="watch-link" onClick={() => shareProject(p)}>Share <ArrowRight size={12}/></button></div>}</div>
             </article>)}</div>
           </section>
         )}
@@ -555,14 +684,14 @@ function App() {
         <div className="modal-head"><h2>Pollinations</h2><button onClick={() => setShowSettings(false)}><X size={18}/></button></div>
         <label>Pollinations App Key</label>
         <input type="text" value={appKey} onChange={e => setAppKey(e.target.value)} placeholder="pk_..." autoComplete="off"/>
-        <p className="modal-copy">Your publishable <b>pk_</b> App Key identifies Stoicky. When you connect, Pollinations asks you to approve a Pollen budget and returns a temporary user-authorized <b>sk_</b> token. Stoicky keeps that token in this browser session only.</p><p className="modal-copy"><b>Important:</b> the App Key must permit at least one text model for script generation and the video model you want to use. Stoicky no longer hard-restricts the OAuth request to a fixed model list; the permissions on your App Key control access.</p>
+        <p className="modal-copy">Your publishable <b>pk_</b> App Key identifies Stoicky. When you connect, Pollinations asks you to approve a Pollen budget and returns a temporary user-authorized <b>sk_</b> token. Stoicky keeps that token in this browser session only.</p>
         {authError && <div className="notice">{authError}</div>}
         <button className="generate" onClick={connectPollinations} disabled={authLoading}>{authLoading ? <><span className="spinner dark"/> Connecting...</> : <><Link2 size={17}/> Connect Pollinations</>}</button>
         <button className="secondary-action" onClick={saveSettings}><Check size={14}/> Save App Key</button>
         {userToken && <button className="disconnect-btn" onClick={disconnectPollinations}><LogOut size={14}/> Disconnect</button>}
         <label className="model-label">Default video model</label>
-        <select value={videoModel} onChange={e => setVideoModel(e.target.value)}>{Object.entries(videoModels).map(([name,id]) => <option key={id} value={id}>{name}</option>)}</select>
-        <p className="modal-copy">Nova Reel is available through Pollinations as <b>amazon/nova-reel-v1</b>. Your approved model restrictions must include any model you select.</p>
+        <select value={videoModel} onChange={e => setVideoModel(e.target.value)}>{videoModels.map(model => <option key={model.id} value={model.id}>{model.title}</option>)}</select>
+        <p className="modal-copy">{modelsLive ? "Live Pollinations model catalog loaded." : "Using the built-in fallback model catalog until the live catalog is reachable."} {characterImage ? "Image-capable models are required for the current face reference." : ""}</p>
       </div></div>}
     </div>
   );
