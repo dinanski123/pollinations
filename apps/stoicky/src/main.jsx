@@ -292,7 +292,7 @@ function App() {
       const script = scriptData.script;
       setProgress("Preparing video prompt...");
       const visual = script.scenes?.slice(0, 4).map(s => s.visual).join(". ") || topic;
-      const videoPrompt = `${style}, vertical 9:16 faceless short-form video about ${script.title || topic}. ${visual}. Cinematic movement, coherent subject, dramatic lighting, no text, no logos.`;
+      const videoPrompt = `${style}, vertical 9:16 ${characterImage ? "on-camera person" : "faceless"} short-form video about ${script.title || topic}. ${visual}. Cinematic movement, coherent subject, dramatic lighting, no text, no logos.${characterImage ? " Keep the supplied person as the central subject and preserve their recognizable appearance." : ""}`;
 
       setProgress("Generating video — this can take a few minutes...");
       const videoRes = await fetch("/api/video", {
