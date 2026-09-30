@@ -4,6 +4,7 @@ import { fetchFile, toBlobURL } from "@ffmpeg/util";
 import { createRoot } from "react-dom/client";
 import { ArrowRight, Check, ChevronDown, ExternalLink, Film, Image as ImageIcon, Layers3, Link2, LogOut, Play, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import "./styles.css";
+import { deleteAssets, getAsset, requestPersistentStorage, safeFilename, saveAsset } from "./storage";
 
 const seedProjects = [
   { id: 1, title: "The discipline nobody talks about", status: "Preview", scenes: 8, updated: "Example", image: "https://image.pollinations.ai/prompt/cinematic%20stoic%20man%20walking%20alone%20at%20night%20rain%20vertical?width=420&height=620&nologo=true" },
@@ -101,8 +102,12 @@ function App() {
   const [videoUrl, setVideoUrl] = useState("");
 
   useEffect(() => {
-    localStorage.setItem("stoicky-projects", JSON.stringify(projects));
+    localStorage.setItem("stoicky-projects", JSON.stringify(projects.map(({ videoUrl, audioUrl, ...project }) => project)));
   }, [projects]);
+
+  useEffect(() => {
+    requestPersistentStorage();
+  }, []);
 
   useEffect(() => {
     const finishOAuth = async () => {
@@ -270,20 +275,72 @@ function App() {
     setCharacterName("");
   };
 
-  const deleteProject = project => {
-    const confirmed = window.confirm(`Delete “${project.title}”? This removes the project from this browser’s Stoicky library.`);
+  const openProject = async project => {
+    setNotice("");
+    setProgress("Loading saved project from device storage...");
+    try {
+      const videoAsset = await getAsset(project.videoAssetId);
+      const audioAsset = await getAsset(project.audioAssetId);
+      if (!videoAsset) throw new Error("The saved video file is missing from this browser.");
+      setVideoUrl(URL.createObjectURL(videoAsset.blob));
+      setAudioUrl(audioAsset ? URL.createObjectURL(audioAsset.blob) : "");
+      setView("create");
+      setProgress("Saved project loaded.");
+    } catch (error) {
+      setNotice(error.message || "Could not load the saved project.");
+      setProgress("");
+    }
+  };
+
+  const downloadProject = async project => {
+    try {
+      const asset = await getAsset(project.videoAssetId);
+      if (!asset) throw new Error("The saved video file is missing from this browser.");
+      const url = URL.createObjectURL(asset.blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = asset.filename || safeFilename(project.title) + ".mp4";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice("Video saved to your Downloads.");
+    } catch (error) {
+      setNotice(error.message || "Could not download the video.");
+    }
+  };
+
+  const shareProject = async project => {
+    try {
+      const asset = await getAsset(project.videoAssetId);
+      if (!asset) throw new Error("The saved video file is missing from this browser.");
+      const file = new File([asset.blob], asset.filename || safeFilename(project.title) + ".mp4", { type: asset.mime || "video/mp4" });
+      if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+        await navigator.share({ title: project.title, files: [file] });
+        setNotice("Video shared.");
+      } else {
+        await downloadProject(project);
+        setNotice("File sharing is not supported here, so the video was downloaded instead.");
+      }
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      setNotice(error.message || "Could not share the video.");
+    }
+  };
+
+  const deleteProject = async project => {
+    const confirmed = window.confirm(`Delete “${project.title}”? This removes the project and its saved files from this browser.`);
     if (!confirmed) return;
 
-    [project.videoUrl, project.audioUrl].forEach(url => {
-      if (typeof url === "string" && url.startsWith("blob:")) {
-        try { URL.revokeObjectURL(url); } catch {}
-      }
-    });
-
-    setProjects(current => current.filter(item => item.id !== project.id));
-    if (videoUrl === project.videoUrl) setVideoUrl("");
-    if (audioUrl === project.audioUrl) setAudioUrl("");
-    setNotice("Project deleted.");
+    try {
+      await deleteAssets([project.videoAssetId, project.audioAssetId]);
+      setProjects(current => current.filter(item => item.id !== project.id));
+      setVideoUrl("");
+      setAudioUrl("");
+      setNotice("Project and its saved files were deleted from this browser.");
+    } catch (error) {
+      setNotice(error.message || "Could not delete the saved files.");
+    }
   };
 
   const generate = async () => {
@@ -359,15 +416,27 @@ function App() {
         url = await muxVideoAndAudio(url, generatedAudioUrl);
       }
 
+      const projectId = Date.now();
+      const videoAssetId = `project-${projectId}-video`;
+      const audioAssetId = generatedAudioUrl ? `project-${projectId}-audio` : "";
+      setProgress("Saving finished video to device storage...");
+      await saveAsset(videoAssetId, await fetch(url).then(response => {
+        if (!response.ok) throw new Error("Could not read the finished video for device storage.");
+        return response.blob();
+      }), safeFilename(script.title || topic.trim().slice(0, 54)) + ".mp4");
+      if (generatedAudioUrl) {
+        await saveAsset(audioAssetId, await fetch(generatedAudioUrl).then(response => response.blob()), safeFilename(script.title || topic.trim().slice(0, 54)) + "-narration.mp3");
+      }
+
       const project = {
-        id: Date.now(),
+        id: projectId,
         title: script.title || topic.trim().slice(0, 54),
         status: "Ready",
         scenes: script.scenes?.length || 0,
         updated: "Just now",
         image: seedProjects[0].image,
-        videoUrl: url,
-        audioUrl: generatedAudioUrl,
+        videoAssetId,
+        audioAssetId,
         characterImage,
         voice,
         script
@@ -471,8 +540,8 @@ function App() {
           <section className="projects">
             <div className="project-toolbar"><p>{projects.length} videos</p><button className="generate compact" onClick={() => setView("create")}><Plus size={16}/> New video</button></div>
             <div className="project-grid">{projects.map(p => <article className="project-card" key={p.id}>
-              <div className="thumb" style={{backgroundImage:'url("' + p.image + '")'}}><span className={"status " + (p.status === "Ready" ? "ready" : "")}>{p.status}</span>{p.videoUrl ? <button className="play" onClick={() => { setVideoUrl(p.videoUrl); setAudioUrl(p.audioUrl || ""); setView("create"); }}><Play size={18} fill="currentColor"/></button> : <button className="play"><Play size={18} fill="currentColor"/></button>}</div>
-              <div className="project-info"><div className="project-title-row"><h3>{p.title}</h3><button className="delete-project" title="Delete project" aria-label={"Delete " + p.title} onClick={() => deleteProject(p)}><Trash2 size={14}/></button></div><div><span>{p.scenes} scenes</span><span>·</span><span>{p.updated}</span></div>{p.videoUrl && <a className="watch-link" href={p.videoUrl} target="_blank" rel="noreferrer">Open video <ArrowRight size={12}/></a>}{p.audioUrl && <a className="watch-link" href={p.audioUrl} target="_blank" rel="noreferrer">Open narration <ArrowRight size={12}/></a>}</div>
+              <div className="thumb" style={{backgroundImage:'url("' + p.image + '")'}}><span className={"status " + (p.status === "Ready" ? "ready" : "")}>{p.status}</span>{p.videoAssetId ? <button className="play" onClick={() => openProject(p)}><Play size={18} fill="currentColor"/></button> : <button className="play" onClick={() => openProject(p)}><Play size={18} fill="currentColor"/></button>}</div>
+              <div className="project-info"><div className="project-title-row"><h3>{p.title}</h3><button className="delete-project" title="Delete project" aria-label={"Delete " + p.title} onClick={() => deleteProject(p)}><Trash2 size={14}/></button></div><div><span>{p.scenes} scenes</span><span>·</span><span>{p.updated}</span></div>{p.videoAssetId && <div className="project-actions"><button className="watch-link" onClick={() => openProject(p)}>Open video <ArrowRight size={12}/></button><button className="watch-link" onClick={() => downloadProject(p)}>Download MP4 <ArrowRight size={12}/></button><button className="watch-link" onClick={() => shareProject(p)}>Share <ArrowRight size={12}/></button></div>}</div>
             </article>)}</div>
           </section>
         )}
