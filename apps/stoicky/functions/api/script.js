@@ -33,17 +33,18 @@ Create exactly ${sceneCount} scenes. Each scene must describe one self-contained
       })
     });
 
-    const data = await response.json();
-    if (!response.ok) return json({ error: data?.error?.message || data?.error || "Script generation failed." }, response.status);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return json({ error: data?.error?.message || data?.error || "Script generation failed." }, response.status);
+    }
 
-    const raw = data?.choices?.[0]?.message?.content || "";
-    const cleaned = String(raw).replace(/^\`\`\`json\s*/i, "").replace(/\s*\`\`\`$/i, "").trim();
-    let script;
-    try { script = JSON.parse(cleaned); }
-    catch { return json({ error: "The AI returned an invalid script format.", raw }); }
-
-    if (!Array.isArray(script.scenes) || script.scenes.length < sceneCount) {
-      return json({ error: `The AI returned only ${script.scenes?.length || 0} scenes; ${sceneCount} are required. Please retry.` }, 502);
+    const raw = extractText(data);
+    const script = parseScript(raw, sceneCount);
+    if (!script) {
+      return json({
+        error: "The AI returned text, but Stoicky could not parse the scene plan. Please retry.",
+        details: raw ? String(raw).slice(0, 500) : "Empty model response."
+      }, 502);
     }
 
     script.scenes = script.scenes.slice(0, sceneCount).map((scene, index) => ({
@@ -52,14 +53,50 @@ Create exactly ${sceneCount} scenes. Each scene must describe one self-contained
       visual: String(scene?.visual || "").trim()
     }));
 
-    if (script.scenes.some(scene => !scene.visual)) {
-      return json({ error: "One or more generated scenes are missing visual direction. Please retry." }, 502);
+    if (script.scenes.length !== sceneCount || script.scenes.some(scene => !scene.visual)) {
+      return json({ error: `The AI returned an incomplete scene plan. Stoicky needs ${sceneCount} usable scenes; please retry.` }, 502);
     }
 
     return json({ script });
   } catch (error) {
     return json({ error: error.message || "Unexpected script generation error." }, 500);
   }
+}
+
+function extractText(data) {
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map(part => typeof part === "string" ? part : part?.text || "").join("\n");
+  }
+  return data?.output_text || data?.text || "";
+}
+
+function parseScript(raw, sceneCount) {
+  if (!raw) return null;
+  let cleaned = String(raw).trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  const candidates = [cleaned];
+  const first = cleaned.indexOf("{");
+  const last = cleaned.lastIndexOf("}");
+  if (first >= 0 && last > first) candidates.push(cleaned.slice(first, last + 1));
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed?.scenes) && parsed.scenes.length >= sceneCount) {
+        return {
+          title: String(parsed.title || "").trim(),
+          hook: String(parsed.hook || "").trim(),
+          scenes: parsed.scenes
+        };
+      }
+    } catch {}
+  }
+  return null;
 }
 
 function json(data, status = 200) {
