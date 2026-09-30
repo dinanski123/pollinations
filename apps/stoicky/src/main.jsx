@@ -475,7 +475,10 @@ function App() {
       });
       const scriptData = await scriptRes.json();
       if (!scriptRes.ok) throw new Error(scriptData.error || "Script generation failed.");
-      const script = scriptData.script;
+      const script = scriptData?.script;
+      if (!script || !Array.isArray(script.scenes) || script.scenes.length < sceneCount) {
+        throw new Error(scriptData?.error || "Script generation returned an incomplete scene plan. Please retry.");
+      }
 
       for (let index = 0; index < sceneCount; index++) {
         const scene = script.scenes[index];
