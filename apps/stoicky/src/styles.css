@@ -50,3 +50,8 @@ label{display:block;font-size:11px;font-weight:700;color:#aab1bf;margin:0 0 8px}
 .audio-preview span{min-width:55px}
 .audio-preview audio{width:100%;height:28px}
 @media(max-width:650px){.character-inputs{grid-template-columns:1fr}.character-controls{align-items:flex-start}.audio-controls{flex-wrap:wrap}}
+
+.project-title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.project-title-row h3{margin:0!important}
+.delete-project{width:28px;height:28px;flex:none;border:1px solid #2a3039;background:#151922;color:#858d9b;border-radius:7px;display:grid;place-items:center}
+.delete-project:hover{color:#ff9d9d;border-color:#704040;background:#1b1518}
